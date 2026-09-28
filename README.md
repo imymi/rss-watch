@@ -28,11 +28,15 @@ uv run rss-watch run
 
 ### 方式一：一键自动安装/升级（推荐）
 
-在包含源码的项目目录下以 root/sudo 权限直接执行自动化安装脚本：
+先确保部署机器的 `git` 已获准访问私有仓库 `imymi/rss-watch`，再复制下面整段命令。源码以当前用户身份拉取，只有安装脚本使用 `sudo`：
 
 ```sh
-sudo ./deploy/install.sh
+src_dir="$(mktemp -d)" &&
+git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
+sudo bash "$src_dir/deploy/install.sh"
 ```
+
+已有本地源码时，也可以在项目目录运行 `sudo ./deploy/install.sh`。不要把 GitHub 令牌写进命令或仓库地址。
 
 `deploy/install.sh` 具备幂等性与企业级安全保障：
 1. 自动检查 Linux/systemd、Python 3.12（强制校验未位于 `/home` 或 `/root`，避免 `ProtectHome=true` 拦截）和 `uv`；
@@ -181,10 +185,12 @@ rss-watch delivery retry EVENT_ID
 
 ### 方式一：一键自动升级（推荐）
 
-将最新代码包解压到本地或覆盖到 `/opt/rss-watch` 后，直接执行：
+升级使用同一组命令，从私有仓库拉取最新源码并执行安装脚本；运行前同样需要为 `git` 配置仓库访问权限：
 
 ```sh
-sudo ./deploy/install.sh
+src_dir="$(mktemp -d)" &&
+git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
+sudo bash "$src_dir/deploy/install.sh"
 ```
 
 脚本将自动执行以下升级保障：
