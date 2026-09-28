@@ -1,0 +1,34 @@
+[Unit]
+Description=RSS keyword monitor and Feishu notifications
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=rss-watch
+Group=rss-watch
+WorkingDirectory=/opt/rss-watch/current
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/rss-watch/current/.venv/bin/rss-watch --config /etc/rss-watch/config.toml run
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+StateDirectory=rss-watch
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rss-watch
+ReadOnlyPaths=/etc/rss-watch
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
