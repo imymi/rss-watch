@@ -31,9 +31,12 @@ uv run rss-watch run
 先确保部署机器的 `git` 已获准访问私有仓库 `imymi/rss-watch`，再复制下面整段命令。源码以当前用户身份拉取，只有安装脚本使用 `sudo`：
 
 ```sh
-src_dir="$(mktemp -d)" &&
-git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
-sudo bash "$src_dir/deploy/install.sh"
+(
+  src_dir="$(mktemp -d)" || exit
+  trap 'exit_status=$?; rm -rf -- "$src_dir" || :; exit "$exit_status"' EXIT
+  git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
+  sudo bash "$src_dir/deploy/install.sh"
+)
 ```
 
 已有本地源码时，也可以在项目目录运行 `sudo ./deploy/install.sh`。不要把 GitHub 令牌写进命令或仓库地址。
@@ -188,9 +191,12 @@ rss-watch delivery retry EVENT_ID
 升级使用同一组命令，从私有仓库拉取最新源码并执行安装脚本；运行前同样需要为 `git` 配置仓库访问权限：
 
 ```sh
-src_dir="$(mktemp -d)" &&
-git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
-sudo bash "$src_dir/deploy/install.sh"
+(
+  src_dir="$(mktemp -d)" || exit
+  trap 'exit_status=$?; rm -rf -- "$src_dir" || :; exit "$exit_status"' EXIT
+  git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
+  sudo bash "$src_dir/deploy/install.sh"
+)
 ```
 
 脚本将自动执行以下升级保障：
