@@ -89,14 +89,24 @@ def write_credential(config: Config, webhook: str, secret: str) -> str:
     return ref
 
 
-def read_credential(config: Config, ref: str) -> dict:
+def credential_path(config: Config, ref: str) -> Path:
     if Path(ref).name != ref or not ref.endswith(".json"):
         raise ValueError("凭据引用无效")
-    fd = os.open(config.credentials_dir / ref, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd) as f:
+    return config.credentials_dir / ref
+
+
+@contextmanager
+def open_credential(config: Config, ref: str):
+    fd = os.open(credential_path(config, ref), os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as f:
         info = os.fstat(f.fileno())
         if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
             raise ValueError("凭据文件必须是权限为 0600 的普通文件")
+        yield f
+
+
+def read_credential(config: Config, ref: str) -> dict:
+    with open_credential(config, ref) as f:
         credential = json.load(f)
     validate_url(credential["webhook"], webhook=True)
     if not isinstance(credential.get("secret"), str):

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 import uuid
 from pathlib import Path
 
-from .config import Config, file_lock, validate_url, write_credential
+from .config import (
+    Config,
+    credential_path,
+    file_lock,
+    open_credential,
+    validate_url,
+    write_credential,
+)
 from .db import Database
 from .domain import match, normalize_word
 
@@ -70,34 +78,63 @@ class Service:
     def bot_list(self) -> list[dict]:
         return self.db.rows("SELECT id,name FROM bots WHERE deleted=0 ORDER BY id")
 
+    def _remove_unused_credential(self, ref: str):
+        # Caller holds admin.lock; a failed reference check must never authorize deletion.
+        path = credential_path(self.config, ref)
+        if not self.db.rows(
+            "SELECT 1 FROM bots WHERE credential_ref=? AND deleted=0 LIMIT 1", (ref,)
+        ):
+            path.unlink(missing_ok=True)
+
     def bot_save(self, name: str, webhook: str, secret: str = "", id: int | None = None):
         name = required(name, "名称")
         with file_lock(self.config.data_dir / "admin.lock"):
-            with self.db.transaction() as db:
-                if id is not None and not db.execute(
-                    "SELECT 1 FROM bots WHERE id=? AND deleted=0", (id,)
-                ).fetchone():
-                    raise ValueError("机器人不存在")
-                ref = write_credential(self.config, webhook, secret)
-                if id is None:
-                    return db.execute(
-                        "INSERT INTO bots(name,credential_ref) VALUES (?,?)", (name, ref)
-                    ).lastrowid
-                db.execute("UPDATE bots SET name=?,credential_ref=? WHERE id=?", (name, ref, id))
-                return id
+            ref = old_ref = None
+            try:
+                with self.db.transaction() as db:
+                    if id is not None:
+                        old = db.execute(
+                            "SELECT credential_ref FROM bots WHERE id=? AND deleted=0", (id,)
+                        ).fetchone()
+                        if not old:
+                            raise ValueError("机器人不存在")
+                        old_ref = old["credential_ref"]
+                        credential_path(self.config, old_ref)
+                    ref = write_credential(self.config, webhook, secret)
+                    if id is None:
+                        id = db.execute(
+                            "INSERT INTO bots(name,credential_ref) VALUES (?,?)", (name, ref)
+                        ).lastrowid
+                    else:
+                        db.execute(
+                            "UPDATE bots SET name=?,credential_ref=? WHERE id=?", (name, ref, id)
+                        )
+            except BaseException:
+                if ref is not None:
+                    self._remove_unused_credential(ref)
+                raise
+            if old_ref is not None:
+                self._remove_unused_credential(old_ref)
+            return id
 
     def bot_delete(self, id: int):
-        with self.db.transaction() as db:
-            if db.execute("SELECT 1 FROM rules WHERE bot_id=?", (id,)).fetchone():
-                raise ValueError("请先删除或改绑引用该机器人的规则")
-            if db.execute(
-                "SELECT 1 FROM deliveries WHERE bot_id=? AND state!='sent'", (id,)
-            ).fetchone():
-                raise ValueError("该机器人还有未完成或失败任务，不能删除")
-            if not db.execute(
-                "UPDATE bots SET deleted=1 WHERE id=? AND deleted=0", (id,)
-            ).rowcount:
-                raise ValueError("机器人不存在")
+        with file_lock(self.config.data_dir / "admin.lock"):
+            with self.db.transaction() as db:
+                if db.execute("SELECT 1 FROM rules WHERE bot_id=?", (id,)).fetchone():
+                    raise ValueError("请先删除或改绑引用该机器人的规则")
+                if db.execute(
+                    "SELECT 1 FROM deliveries WHERE bot_id=? AND state!='sent'", (id,)
+                ).fetchone():
+                    raise ValueError("该机器人还有未完成或失败任务，不能删除")
+                old = db.execute(
+                    "SELECT credential_ref FROM bots WHERE id=? AND deleted=0", (id,)
+                ).fetchone()
+                if not old:
+                    raise ValueError("机器人不存在")
+                ref = old["credential_ref"]
+                credential_path(self.config, ref)
+                db.execute("UPDATE bots SET deleted=1 WHERE id=?", (id,))
+            self._remove_unused_credential(ref)
 
     def rule_list(self) -> list[dict]:
         return self.db.rows("SELECT * FROM rules ORDER BY id")
@@ -212,12 +249,14 @@ class Service:
                 target = destination / "credentials"
                 target.mkdir(mode=0o700)
                 refs = Database(destination / "rss-watch.sqlite3").rows(
-                    "SELECT DISTINCT credential_ref FROM bots"
+                    "SELECT DISTINCT credential_ref FROM bots WHERE deleted=0"
                 )
                 for row in refs:
-                    shutil.copyfile(self.config.credentials_dir / row["credential_ref"],
-                                    target / row["credential_ref"])
-                    (target / row["credential_ref"]).chmod(0o600)
+                    ref = row["credential_ref"]
+                    with open_credential(self.config, ref) as source:
+                        fd = os.open(target / ref, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(fd, "wb") as output:
+                            shutil.copyfileobj(source, output)
                 (destination / "rss-watch.sqlite3").chmod(0o600)
                 (destination / "manifest.json").write_text(json.dumps({
                     "schema_version": 1, "created": time.time(),

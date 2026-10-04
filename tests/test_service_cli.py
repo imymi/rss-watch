@@ -17,6 +17,7 @@ from .conftest import rss
 
 def test_validation_and_crud(configured):
     svc, bot, source, rule = configured
+    ref = svc.db.rows("SELECT credential_ref FROM bots")[0]["credential_ref"]
     with pytest.raises(ValueError):
         svc.source_save("bad", "https://example.com/a", 59)
     with pytest.raises(sqlite3.IntegrityError):
@@ -27,6 +28,7 @@ def test_validation_and_crud(configured):
         svc.rule_save("bad", ["AI"], [], "any", [9999], bot)
     with pytest.raises(ValueError):
         svc.bot_delete(bot)
+    assert {path.name for path in svc.config.credentials_dir.iterdir()} == {ref}
     svc.source_save("new", "https://example.com/feed", 60, source)
     assert svc.source_list()[0]["name"] == "new"
     svc.rule_enable(rule, False)
@@ -36,6 +38,7 @@ def test_validation_and_crud(configured):
     assert not svc.source_list()
     svc.bot_delete(bot)
     assert not svc.bot_list()
+    assert not list(svc.config.credentials_dir.iterdir())
 
 
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "https://user:pass@example.org/a",
@@ -55,7 +58,8 @@ def test_credentials_and_backup(configured, tmp_path):
     svc.bot_test(bot)
     target = tmp_path / "backup"
     svc.backup(target)
-    assert (target / "credentials" / ref).is_file()
+    assert {path.name for path in (target / "credentials").iterdir()} == {ref}
+    assert stat.S_IMODE((target / "credentials" / ref).stat().st_mode) == 0o600
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
     assert Database(target / "rss-watch.sqlite3").rows("SELECT * FROM deliveries")
     # Online backup remains independently readable after the live DB changes.
@@ -107,6 +111,7 @@ def test_cli_init_menu_and_commands(tmp_path):
     credential.chmod(0o600)
     commands = [
         ["bot", "add", "飞书", "--credential-file", str(credential)],
+        ["bot", "update", "1", "新群", "--credential-file", str(credential)],
         ["source", "add", "源", "https://example.org/feed"],
         ["rule", "add", "AI", "--bot", "1", "--include", "AI", "--source", "1"],
         ["rule", "test", "1", "ＡＩ"],
@@ -123,6 +128,7 @@ def test_cli_init_menu_and_commands(tmp_path):
         result = runner.invoke(app, [*prefix, *command])
         assert result.exit_code == 0, (command, result.output, result.exception)
         assert "TOPSECRET" not in result.output
+        assert "https://open.feishu.cn/open-apis/bot/v2/hook/test" not in result.output
 
 
 def test_menu_crud_and_test_rule(tmp_path, monkeypatch):

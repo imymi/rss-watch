@@ -218,10 +218,13 @@ class Worker:
                 (attempt, now, now + RETRY_DELAYS[min(attempt - 1, 3)], delivery["id"]),
             )
             db.execute("UPDATE bots SET next_send=? WHERE id=?", (now + 1, delivery["bot_id"]))
-        try:
+            # Load before releasing the transaction so credential rotation cannot unlink it first.
             try:
                 credential = read_credential(self.config, delivery["credential_ref"])
             except (OSError, ValueError, KeyError, TypeError):
+                credential = None
+        try:
+            if credential is None:
                 raise DeliveryError("凭据不可读、权限不是 0600 或格式无效", False) from None
             await send_feishu(self.client, credential, delivery["payload"])
         except DeliveryError as error:

@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+from contextlib import contextmanager
 
 import httpx
 import pytest
@@ -140,6 +141,38 @@ async def test_success_spacing_and_missing_credentials(configured, monkeypatch):
         assert await worker.deliver_one()
         failed = svc.history(state="failed")[0]
         assert failed["attempts"] == 1 and "0600" in failed["last_error"]
+
+
+async def test_rotation_after_claim_keeps_delivery_credentials(configured, monkeypatch):
+    svc, bot, _, _ = configured
+    event = svc.bot_test(bot)
+    ref = svc.db.rows("SELECT credential_ref FROM bots WHERE id=?", (bot,))[0]["credential_ref"]
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"code": 0})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        worker = Worker(svc.config, client)
+        transaction = worker.db.transaction
+        rotated = False
+
+        @contextmanager
+        def rotate_after_commit():
+            nonlocal rotated
+            with transaction() as db:
+                yield db
+            if not rotated:
+                rotated = True
+                svc.bot_save("rotated", CREDENTIAL["webhook"], "new-secret", bot)
+                assert not (svc.config.credentials_dir / ref).exists()
+
+        monkeypatch.setattr(worker.db, "transaction", rotate_after_commit)
+        assert await worker.deliver_one()
+    assert svc.history(state="sent")[0]["id"] == event
+    assert len(payloads) == 1
+    assert payloads[0]["sign"] == signature(payloads[0]["timestamp"], "secret")
 
 
 async def test_crash_recovery_and_max_attempt(configured):
