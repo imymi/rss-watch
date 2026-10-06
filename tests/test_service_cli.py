@@ -137,13 +137,13 @@ def test_menu_crud_and_test_rule(tmp_path, monkeypatch):
     runner.invoke(app, [*prefix, "init", "--data-dir", str(tmp_path / "data"),
                         "--credentials-dir", str(tmp_path / "creds")])
     # Bot, source, rule, rule sample, status, exit: exercises the real numbered menus.
-    monkeypatch.setattr("rss_watch.cli.credential_input", lambda _: (
+    monkeypatch.setattr("rss_watch.cli.credential_input", lambda _, **kwargs: (
         "https://open.feishu.cn/open-apis/bot/v2/hook/test", "",
     ))
-    inputs = ["3", "1", "群",
-              "1", "1", "技术源", "https://example.org/feed", "300",
-              "2", "1", "AI", "1", "AI", "广告", "any", "1",
-              "2", "6", "1", "AI 新消息", "", "6", "0"]
+    inputs = ["3", "1", "群", "0",
+              "1", "1", "技术源", "https://example.org/feed", "300", "0",
+              "2", "1", "AI", "1", "AI", "广告", "1", "1",
+              "6", "1", "AI 新消息", "0", "6", "0"]
     result = runner.invoke(app, [*prefix, "menu"], input="\n".join(inputs) + "\n")
     assert result.exit_code == 0, (result.output, result.exception)
     assert "命中：AI" in result.output
