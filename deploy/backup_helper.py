@@ -172,6 +172,23 @@ def verify_backup(dest: Path) -> None:
             )
             sys.exit(1)
 
+    # Recovery copies every top-level *.json, so require exactly the active refs.
+    active_refs = {bot["credential_ref"] for bot in bots}
+    try:
+        actual_refs = {
+            path.name for path in target_creds.iterdir() if path.name.endswith(".json")
+        }
+    except OSError as exc:
+        print(f"FATAL: 备份凭据目录校验失败: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if actual_refs != active_refs:
+        print(
+            "FATAL: 备份凭据集合与活动机器人引用不一致 "
+            f"(额外: {sorted(actual_refs - active_refs)}, 缺少: {sorted(active_refs - actual_refs)})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     print(f"备份校验全部通过: {dest}")
 
 

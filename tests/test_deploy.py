@@ -913,6 +913,55 @@ def test_backup_helper_copies_distinct_active_credentials(service, tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize("active_bots", [0, 1])
+def test_backup_helper_verify_rejects_legacy_deleted_credentials(service, tmp_path, active_bots):
+    webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/helper"
+    if active_bots:
+        service.bot_save("active", webhook, "active-secret")
+    extra_ref = write_credential(service.config, webhook, "deleted-secret")
+    with service.db.transaction() as db:
+        db.execute(
+            "INSERT INTO bots(name,credential_ref,deleted) VALUES (?,?,1)",
+            ("deleted", extra_ref),
+        )
+    dest = tmp_path / "legacy_backup"
+    service.backup(dest)
+    # Older Service.backup() included refs from deleted bots as well as active bots.
+    extra = dest / "credentials" / extra_ref
+    shutil.copy2(service.config.credentials_dir / extra_ref, extra)
+    assert extra.is_file() and stat.S_IMODE(extra.stat().st_mode) == 0o600
+    assert json.loads(extra.read_text()) == {"webhook": webhook, "secret": "deleted-secret"}
+
+    result = run_standalone_backup_helper("verify", dest)
+    assert result.returncode == 1
+    assert "FATAL:" in result.stderr and "额外" in result.stderr and extra_ref in result.stderr
+    assert "备份校验全部通过" not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("active_bots", [0, 2])
+def test_backup_helper_verify_accepts_distinct_active_credentials(service, tmp_path, active_bots):
+    if active_bots:
+        bot = service.bot_save("active", "https://open.feishu.cn/open-apis/bot/v2/hook/helper")
+        ref = service.db.rows("SELECT credential_ref FROM bots WHERE id=?", (bot,))[0]["credential_ref"]
+        with service.db.transaction() as db:
+            db.execute("INSERT INTO bots(name,credential_ref) VALUES (?,?)", ("shared", ref))
+    with service.db.transaction() as db:
+        db.execute(
+            "INSERT INTO bots(name,credential_ref,deleted) VALUES (?,?,1)",
+            ("deleted", "deleted.json"),
+        )
+    dest = tmp_path / "backup"
+    service.backup(dest)
+    assert {path.name for path in (dest / "credentials").iterdir()} == (
+        {ref} if active_bots else set()
+    )
+
+    result = run_standalone_backup_helper("verify", dest)
+    assert result.returncode == 0, result.stderr
+    assert "备份校验全部通过" in result.stdout
+
+
 @pytest.mark.parametrize("existing", ["file", "symlink"])
 def test_backup_helper_never_overwrites_existing_credential(service, tmp_path, monkeypatch, existing):
     bot = service.bot_save("bot", "https://open.feishu.cn/open-apis/bot/v2/hook/helper")
