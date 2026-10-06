@@ -182,7 +182,7 @@ rss-watch delivery retry EVENT_ID
 - 已发送任务及完整文章内容保留 90 天；精简文章指纹、未完成/失败任务保留。后台启动时及每日清理。
 - 所有持久化时间为 Unix UTC 时间戳；来源发布时间保留原文。服务心跳超过 10 秒视为不在线。状态概览的心跳时间使用当前机器的本地时区；在线仅表示后台心跳有效。队列计数基于当前保留的推送记录，最近错误可能包含正在重试的任务和已停用订阅源的历史错误。原先解析 `status` JSON 的脚本需改用 `status --json`。
 
-凭据为随机引用的独立 JSON 文件，强制 `0600`，文件目录 `0700`；数据库仅存文件引用。替换凭据会生成新文件，旧文件保留以避免与在途读取竞争；备份仅包含当前引用的文件。备份本身也包含密钥，应限制访问。
+凭据为随机引用的独立 JSON 文件，强制 `0600`，文件目录 `0700`；数据库仅存文件引用。替换凭据会生成新文件，数据库成功切换到新引用后，仅在旧凭据不再被任何活动机器人引用时清理旧文件；删除机器人后也仅清理已无活动引用的凭据文件。发送路径在领取任务的数据库事务释放前，将本次发送所需凭据读入内存，以避免与凭据清理竞争。备份仅包含活动机器人当前引用的凭据文件。备份本身也包含密钥，应限制访问。
 
 ## 升级与恢复
 
@@ -232,30 +232,42 @@ sudo /opt/rss-watch/current/deploy/check.sh
 
 若发生误操作、磁盘损坏或需要回滚旧版本，可使用以下步骤从备份目录完整恢复：
 
+以下为默认路径示例；自定义安装须先按实际配置替换路径并核对归属，不得使用空路径、根目录、系统公共目录、父目录穿越或经过符号链接的路径。先退出所有管理 CLI，再整段执行；停止服务或备份校验失败时不得继续恢复。
+
 ```sh
+(
+set -e
 # 假设备份位于 /var/lib/rss-watch/backups/upgrade-20260914_180000
 
 # 1. 停止 systemd 服务和所有管理 CLI
 sudo systemctl stop rss-watch
+[ "$(sudo systemctl show rss-watch -p ActiveState --value)" = inactive ]
 
 # 2. 备份当前故障现场（防止二次损坏）
 sudo tar -czf "/tmp/rss-watch-crash-$(date +%s).tar.gz" /var/lib/rss-watch /etc/rss-watch 2>/dev/null || true
 
-# 3. 恢复数据库文件（注意清理旧的 -wal 和 -shm 临时文件，避免混入）
+# 3. 校验备份与目标凭据路径（失败则中止，不修改现有数据库和凭据）
+sudo /opt/rss-watch/current/.venv/bin/python /opt/rss-watch/current/deploy/backup_helper.py verify /var/lib/rss-watch/backups/upgrade-20260914_180000
+sudo test "$(sudo realpath -e /etc/rss-watch/credentials)" = /etc/rss-watch/credentials
+
+# 4. 恢复数据库文件（注意清理旧的 -wal 和 -shm 临时文件，避免混入）
 sudo rm -f /var/lib/rss-watch/rss-watch.sqlite3-wal /var/lib/rss-watch/rss-watch.sqlite3-shm
 sudo cp -f /var/lib/rss-watch/backups/upgrade-20260914_180000/rss-watch.sqlite3 /var/lib/rss-watch/
 sudo chown rss-watch:rss-watch /var/lib/rss-watch/rss-watch.sqlite3
 sudo chmod 0600 /var/lib/rss-watch/rss-watch.sqlite3
 
-# 4. 恢复物理凭据文件
-sudo cp -f /var/lib/rss-watch/backups/upgrade-20260914_180000/credentials/*.json /etc/rss-watch/credentials/ 2>/dev/null || true
+# 5. 恢复物理凭据文件（仅清理目录第一层的 .json 文件/链接，不递归）
+sudo find /etc/rss-watch/credentials -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -name "*.json" -delete
+# 空凭据备份无需复制；复制失败仍中止恢复
+sudo find /var/lib/rss-watch/backups/upgrade-20260914_180000/credentials -mindepth 1 -maxdepth 1 -type f -name "*.json" -exec cp -f -t /etc/rss-watch/credentials/ -- {} +
 sudo chown -R rss-watch:rss-watch /etc/rss-watch/credentials
 sudo chmod 0700 /etc/rss-watch/credentials
 sudo find /etc/rss-watch/credentials -type f -name "*.json" -exec chmod 0600 {} +
 
-# 5. 启动服务并运行自检验证
+# 6. 启动服务并运行自检验证
 sudo systemctl start rss-watch
 sudo /opt/rss-watch/current/deploy/check.sh
+)
 ```
 
 恢复旧备份可能重发备份后已送达的通知，这是至少一次投递的预期行为。

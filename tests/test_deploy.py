@@ -1,13 +1,20 @@
+import fcntl
 import json
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event
 
-from deploy import entry_helper
+import pytest
+
+from deploy import backup_helper, entry_helper
 from rss_watch.config import Config, write_credential
 from rss_watch.db import Database
 from rss_watch.service import Service
@@ -769,6 +776,265 @@ def test_backup_helper_direct_execution(tmp_path):
     assert (sim_target / "file1.txt").is_file()
     assert (sim_target / ".hidden_file").is_file()
     assert (sim_target / ".venv" / "item.txt").is_file()
+
+
+def run_standalone_backup_helper(*args):
+    # Disable site packages and project imports to exercise the stdlib-only fallback.
+    return subprocess.run(
+        [sys.executable, "-I", "-S", str(BACKUP_HELPER), *map(str, args)],
+        capture_output=True, text=True, timeout=10,
+    )
+
+
+@pytest.fixture(params=["backup", "verify"])
+def helper_backup_case(request, service, tmp_path):
+    bot = service.bot_save(
+        "Helper安全测试机器人", "https://open.feishu.cn/open-apis/bot/v2/hook/helper", "secret"
+    )
+    dest = tmp_path / "helper_backup"
+    config = service.config
+    args = ["backup", config.data_dir, config.credentials_dir, dest]
+    if request.param == "verify":
+        result = run_standalone_backup_helper(*args)
+        assert result.returncode == 0, result.stderr
+        config = Config(dest, dest / "credentials")
+        args = ["verify", dest]
+    return config, bot, dest, args
+
+
+@pytest.mark.parametrize(
+    "invalid", ["parent", "absolute", "nested", "dot", "extension", "empty", "nul", "blob"]
+)
+def test_backup_helper_rejects_invalid_credential_refs(helper_backup_case, invalid):
+    config, bot, dest, args = helper_backup_case
+    with sqlite3.connect(config.database) as db:
+        ref = db.execute("SELECT credential_ref FROM bots WHERE id=?", (bot,)).fetchone()[0]
+    original = (config.credentials_dir / ref).read_bytes()
+    outside = config.credentials_dir.parent / "outside.json"
+    outside.write_bytes(original)
+    outside.chmod(0o600)
+    nested = config.credentials_dir / "nested"
+    nested.mkdir()
+    for path in (nested / "inside.json", config.credentials_dir / "inside.json",
+                 config.credentials_dir / "inside.txt"):
+        path.write_bytes(original)
+        path.chmod(0o600)
+    invalid_ref = {
+        "parent": "../outside.json",
+        "absolute": str(outside),
+        "nested": "nested/inside.json",
+        "dot": "./inside.json",
+        "extension": "inside.txt",
+        "empty": "",
+        "nul": "inside\x00.json",
+        "blob": b"inside.json",
+    }[invalid]
+    with sqlite3.connect(config.database) as db:
+        db.execute("UPDATE bots SET credential_ref=? WHERE id=?", (invalid_ref, bot))
+
+    result = run_standalone_backup_helper(*args)
+    assert result.returncode == 1
+    assert "FATAL:" in result.stderr and "Helper安全测试机器人" in result.stderr
+    assert ("embedded null" if invalid == "nul" else "凭据引用无效") in result.stderr
+    assert "Traceback" not in result.stderr
+    assert outside.read_bytes() == original
+    assert (config.credentials_dir / ref).read_bytes() == original
+    if args[0] == "backup":
+        assert not (dest / "manifest.json").exists()
+        assert list((dest / "credentials").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "invalid", ["symlink", "dangling_symlink", "directory", "fifo", "permissions", "special_mode"]
+)
+def test_backup_helper_rejects_unsafe_credential_files(helper_backup_case, invalid):
+    config, bot, dest, args = helper_backup_case
+    with sqlite3.connect(config.database) as db:
+        ref = db.execute("SELECT credential_ref FROM bots WHERE id=?", (bot,)).fetchone()[0]
+    path = config.credentials_dir / ref
+    original = path.read_bytes()
+    outside = config.credentials_dir.parent / "outside.json"
+    outside.write_bytes(original)
+    outside.chmod(0o600)
+    if invalid in {"permissions", "special_mode"}:
+        mode = 0o644 if invalid == "permissions" else 0o1600
+        path.chmod(mode)
+        assert stat.S_IMODE(path.stat().st_mode) == mode
+    else:
+        path.unlink()
+        if invalid in {"symlink", "dangling_symlink"}:
+            path.symlink_to(outside if invalid == "symlink" else outside.with_name("missing.json"))
+        elif invalid == "directory":
+            path.mkdir(mode=0o600)
+        else:
+            os.mkfifo(path, 0o600)
+
+    result = run_standalone_backup_helper(*args)
+    assert result.returncode == 1
+    assert "FATAL:" in result.stderr and "Helper安全测试机器人" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert outside.read_bytes() == original
+    if args[0] == "backup":
+        assert not (dest / "manifest.json").exists()
+        assert list((dest / "credentials").iterdir()) == []
+
+
+def test_backup_helper_copies_distinct_active_credentials(service, tmp_path):
+    bot = service.bot_save(
+        "active", "https://open.feishu.cn/open-apis/bot/v2/hook/helper", "active-secret"
+    )
+    ref = service.db.rows("SELECT credential_ref FROM bots WHERE id=?", (bot,))[0]["credential_ref"]
+    orphan = write_credential(
+        service.config, "https://open.feishu.cn/open-apis/bot/v2/hook/helper", "orphan"
+    )
+    with service.db.transaction() as db:
+        db.executemany("INSERT INTO bots(name,credential_ref,deleted) VALUES (?,?,?)", [
+            ("shared", ref, 0), ("deleted", "../invalid.json", 1),
+        ])
+    dest = tmp_path / "backup"
+    result = run_standalone_backup_helper(
+        "backup", service.config.data_dir, service.config.credentials_dir, dest
+    )
+    assert result.returncode == 0, result.stderr
+    assert {path.name for path in (dest / "credentials").iterdir()} == {ref}
+    assert (service.config.credentials_dir / orphan).is_file()
+    assert (dest / "credentials" / ref).read_bytes() == (
+        service.config.credentials_dir / ref
+    ).read_bytes()
+    for path in (dest / "rss-watch.sqlite3", dest / "credentials" / ref, dest / "manifest.json"):
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads((dest / "manifest.json").read_text()) == {
+        "schema_version": 1,
+        "type": "online_backup_fallback",
+        "data_dir": str(service.config.data_dir.resolve()),
+        "credentials_dir": str(service.config.credentials_dir.resolve()),
+    }
+    result = run_standalone_backup_helper("verify", dest)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("existing", ["file", "symlink"])
+def test_backup_helper_never_overwrites_existing_credential(service, tmp_path, monkeypatch, existing):
+    bot = service.bot_save("bot", "https://open.feishu.cn/open-apis/bot/v2/hook/helper")
+    ref = service.db.rows("SELECT credential_ref FROM bots WHERE id=?", (bot,))[0]["credential_ref"]
+    dest = tmp_path / "backup"
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"must survive")
+    outside.chmod(0o600)
+    open_credential = backup_helper.open_credential
+
+    @contextmanager
+    def inject_existing_target(directory, reference):
+        with open_credential(directory, reference) as source:
+            target = dest / "credentials" / reference
+            if existing == "symlink":
+                target.symlink_to(outside)
+            else:
+                target.write_bytes(b"must survive")
+            yield source
+
+    monkeypatch.setattr(backup_helper, "open_credential", inject_existing_target)
+    with pytest.raises(SystemExit) as error:
+        backup_helper.backup_database_and_credentials(
+            service.config.data_dir, service.config.credentials_dir, dest
+        )
+    assert error.value.code == 1
+    assert outside.read_bytes() == b"must survive"
+    assert (dest / "credentials" / ref).read_bytes() == b"must survive"
+    assert not (dest / "manifest.json").exists()
+
+
+def test_backup_helper_copies_open_descriptor_after_path_replacement(service, tmp_path, monkeypatch):
+    bot = service.bot_save(
+        "bot", "https://open.feishu.cn/open-apis/bot/v2/hook/helper", "snapshot-secret"
+    )
+    ref = service.db.rows("SELECT credential_ref FROM bots WHERE id=?", (bot,))[0]["credential_ref"]
+    original = (service.config.credentials_dir / ref).read_bytes()
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b"must not be copied")
+    outside.chmod(0o600)
+    open_credential = backup_helper.open_credential
+
+    @contextmanager
+    def replace_open_path(directory, reference):
+        with open_credential(directory, reference) as source:
+            path = directory / reference
+            path.unlink()
+            path.symlink_to(outside)
+            yield source
+
+    monkeypatch.setattr(backup_helper, "open_credential", replace_open_path)
+    dest = tmp_path / "backup"
+    backup_helper.backup_database_and_credentials(
+        service.config.data_dir, service.config.credentials_dir, dest
+    )
+    assert (dest / "credentials" / ref).read_bytes() == original
+    assert outside.read_bytes() == b"must not be copied"
+
+
+@pytest.mark.parametrize("action", ["rotate", "delete"])
+@pytest.mark.parametrize("phase", ["snapshot", "copy"])
+def test_backup_helper_lock_protects_snapshot_credentials(service, tmp_path, monkeypatch, action, phase):
+    webhook = "https://open.feishu.cn/open-apis/bot/v2/hook/helper"
+    bot = service.bot_save("bot", webhook, "snapshot-secret")
+    ref = service.db.rows("SELECT credential_ref FROM bots WHERE id=?", (bot,))[0]["credential_ref"]
+    original = (service.config.credentials_dir / ref).read_bytes()
+    paused, release, mutation_started = Event(), Event(), Event()
+    connect = sqlite3.connect
+    copyfileobj = shutil.copyfileobj
+
+    def pause():
+        paused.set()
+        assert release.wait(5)
+
+    class PausedConnection(sqlite3.Connection):
+        def backup(self, target, **kwargs):
+            pause()
+            return super().backup(target, **kwargs)
+
+    def paused_copy(source, output):
+        pause()
+        return copyfileobj(source, output)
+
+    def mutate():
+        mutation_started.set()
+        if action == "rotate":
+            service.bot_save("rotated", webhook, "new-secret", bot)
+        else:
+            service.bot_delete(bot)
+
+    if phase == "snapshot":
+        monkeypatch.setattr(backup_helper.sqlite3, "connect", lambda *args, **kwargs: connect(
+            *args, **kwargs, factory=PausedConnection,
+        ))
+    else:
+        monkeypatch.setattr(backup_helper.shutil, "copyfileobj", paused_copy)
+    dest = tmp_path / "backup"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        backup_future = pool.submit(
+            backup_helper.backup_database_and_credentials,
+            service.config.data_dir, service.config.credentials_dir, dest,
+        )
+        try:
+            assert paused.wait(5)
+            with (service.config.data_dir / "admin.lock").open("r+") as lock:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            mutation_future = pool.submit(mutate)
+            assert mutation_started.wait(5)
+            with pytest.raises(TimeoutError):
+                mutation_future.result(timeout=0.1)
+            assert (service.config.credentials_dir / ref).read_bytes() == original
+        finally:
+            release.set()
+        backup_future.result(timeout=5)
+        mutation_future.result(timeout=5)
+    assert not (service.config.credentials_dir / ref).exists()
+    with sqlite3.connect(dest / "rss-watch.sqlite3") as db:
+        assert db.execute("SELECT credential_ref FROM bots WHERE id=? AND deleted=0", (bot,)).fetchone() == (ref,)
+    assert (dest / "credentials" / ref).read_bytes() == original
+    result = run_standalone_backup_helper("verify", dest)
+    assert result.returncode == 0, result.stderr
 
 
 def test_legacy_upgrade_executed_from_within_target_dir_succeeds(tmp_path):

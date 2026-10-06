@@ -8,11 +8,42 @@ using only the Python standard library.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import os
 import shutil
 import sqlite3
+import stat
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def file_lock(path: Path):
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def credential_path(creds_dir: Path, ref: str) -> Path:
+    if not isinstance(ref, str) or Path(ref).name != ref or not ref.endswith(".json"):
+        raise ValueError("凭据引用无效")
+    return creds_dir / ref
+
+
+@contextmanager
+def open_credential(creds_dir: Path, ref: str):
+    # Nonblocking open lets fstat reject FIFOs without waiting for a writer.
+    fd = os.open(credential_path(creds_dir, ref), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+            raise ValueError("凭据文件必须是权限为 0600 的普通文件")
+        yield source
 
 
 def backup_database_and_credentials(data_dir: Path, creds_dir: Path, dest: Path) -> None:
@@ -21,6 +52,13 @@ def backup_database_and_credentials(data_dir: Path, creds_dir: Path, dest: Path)
         print(f"FATAL: 数据库文件不存在: {src_db}", file=sys.stderr)
         sys.exit(1)
 
+    # Freeze administrative credential changes across the database snapshot and file copies.
+    with file_lock(data_dir / "admin.lock"):
+        _backup_database_and_credentials(data_dir, creds_dir, dest)
+
+
+def _backup_database_and_credentials(data_dir: Path, creds_dir: Path, dest: Path) -> None:
+    src_db = data_dir / "rss-watch.sqlite3"
     dest.mkdir(mode=0o700, parents=True, exist_ok=False)
     dst_db = dest / "rss-watch.sqlite3"
 
@@ -47,27 +85,33 @@ def backup_database_and_credentials(data_dir: Path, creds_dir: Path, dest: Path)
     with sqlite3.connect(dst_db) as db:
         db.row_factory = sqlite3.Row
         bots = db.execute("SELECT id, name, credential_ref FROM bots WHERE deleted=0").fetchall()
+        copied = set()
         for row in bots:
             ref = row["credential_ref"]
-            src_f = creds_dir / ref
+            if ref in copied:
+                continue
             bot_id = row["id"]
             bot_name = row["name"]
-            if not src_f.is_file():
+            try:
+                with open_credential(creds_dir, ref) as source:
+                    fd = os.open(
+                        target_creds / ref, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+                    )
+                    with os.fdopen(fd, "wb") as output:
+                        shutil.copyfileobj(source, output)
+            except FileNotFoundError:
                 print(
                     f"FATAL: 数据库引用的凭据物理文件不存在: {ref} (机器人 #{bot_id} {bot_name})",
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            mode = src_f.stat().st_mode & 0o777
-            if mode != 0o600:
+            except (OSError, ValueError) as exc:
                 print(
-                    f"FATAL: 凭据文件权限不合规: {src_f} (期望 0600，实际 {oct(mode)})",
+                    f"FATAL: 凭据备份失败: {ref} (机器人 #{bot_id} {bot_name}): {exc}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            dst_f = target_creds / ref
-            shutil.copyfile(src_f, dst_f)
-            dst_f.chmod(0o600)
+            copied.add(ref)
 
     manifest_file = dest / "manifest.json"
     manifest_data = {
@@ -110,19 +154,20 @@ def verify_backup(dest: Path) -> None:
 
     for bot in bots:
         ref = bot["credential_ref"]
-        cf = target_creds / ref
         bot_id = bot["id"]
         bot_name = bot["name"]
-        if not cf.is_file():
+        try:
+            with open_credential(target_creds, ref):
+                pass
+        except FileNotFoundError:
             print(
                 f"FATAL: 备份验证失败，缺少机器人 #{bot_id} ({bot_name}) 凭据文件: {ref}",
                 file=sys.stderr,
             )
             sys.exit(1)
-        mode = cf.stat().st_mode & 0o777
-        if mode != 0o600:
+        except (OSError, ValueError) as exc:
             print(
-                f"FATAL: 备份凭据文件权限不合规: {cf} (期望 0600，实际 {oct(mode)})",
+                f"FATAL: 备份凭据校验失败: {ref} (机器人 #{bot_id} {bot_name}): {exc}",
                 file=sys.stderr,
             )
             sys.exit(1)
