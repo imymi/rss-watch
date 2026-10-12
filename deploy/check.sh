@@ -220,10 +220,10 @@ try:
     cursor = conn.cursor()
 
     version = cursor.execute("PRAGMA user_version").fetchone()[0]
-    if version != 1:
-        print(f"FATAL: 数据库 schema 版本不兼容 (当前: {version}，预期: 1)")
+    if version != 2:
+        print(f"FATAL: 数据库 schema 版本不兼容 (当前: {version}，预期: 2)")
     else:
-        print(f"OK: 数据库访问正常，schema 版本为 1")
+        print(f"OK: 数据库访问正常，schema 版本为 2")
 
     # 心跳与运行状态检查
     runtime = dict(cursor.execute("SELECT key, value FROM runtime").fetchall())

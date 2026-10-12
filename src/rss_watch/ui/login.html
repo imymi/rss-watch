@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ '初始化' if setup else '登录' }} · RSS Watch</title><link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/app.css"></head>
+<body class="auth-body"><main class="auth-card">
+  <div class="brand"><span class="brand-mark">◔</span><span>RSS Watch<small>订阅监控工作台</small></span></div>
+  <h1>{{ '创建管理员' if setup else '欢迎回来' }}</h1>
+  <p class="muted">{{ '完成初始化，即可在这里管理订阅、规则与飞书通知。' if setup else '登录以管理你的订阅与通知。' }}</p>
+  {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
+  <form method="post" action="{{ '/setup' if setup else '/login' }}" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if setup %}<label>初始化口令<input type="password" name="token" required autocomplete="off"></label><p class="hint">在部署机器运行 <code>docker compose exec web cat /data/bootstrap-token</code> 获取。</p>{% endif %}
+    <label>管理员名称<input name="username" required maxlength="64" autocomplete="username" autofocus></label>
+    <label>密码<input type="password" name="password" required {{ 'minlength=12' if setup else '' }} maxlength="256" autocomplete="{{ 'new-password' if setup else 'current-password' }}"></label>
+    {% if setup %}<p class="hint">密码至少 12 个字符。初始化口令使用后失效。</p>{% endif %}
+    <button class="primary" type="submit">{{ '创建管理员' if setup else '登录后台' }}</button>
+  </form>
+  <p class="auth-foot">RSS / Atom · 关键词匹配 · 飞书通知</p>
+</main></body></html>

@@ -695,7 +695,7 @@ exit 0
     assert (backup_db.stat().st_mode & 0o777) == 0o600
     assert backup_cred.is_file()
     assert (backup_cred.stat().st_mode & 0o777) == 0o600
-    assert json.loads(manifest.read_text())["schema_version"] == 1
+    assert json.loads(manifest.read_text())["schema_version"] == 2
 
     # 验证备份完全可恢复且内容一致
     restore_dir = tmp_path / "restored_data"
@@ -904,7 +904,7 @@ def test_backup_helper_copies_distinct_active_credentials(service, tmp_path):
     for path in (dest / "rss-watch.sqlite3", dest / "credentials" / ref, dest / "manifest.json"):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert json.loads((dest / "manifest.json").read_text()) == {
-        "schema_version": 1,
+        "schema_version": 2,
         "type": "online_backup_fallback",
         "data_dir": str(service.config.data_dir.resolve()),
         "credentials_dir": str(service.config.credentials_dir.resolve()),

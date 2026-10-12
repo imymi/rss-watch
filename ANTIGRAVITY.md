@@ -1,6 +1,6 @@
 # Antigravity 开发交接
 
-本目录是可独立安装的 Python 项目。用户确认的范围：Linux 原生 systemd、中文数字菜单/CLI、100 个以内 RSS/Atom 源、任一/全部包含词与排除词、飞书群自定义机器人。不要自行扩展 Web UI、全文抓取或其他聊天平台。
+本目录是可独立安装的 Python 项目。用户已授权 Docker Compose 部署和中文管理后台，沿用原生 systemd 与 CLI，RSS/Atom 标题关键词监控、任一/全部包含词与排除词、飞书群自定义机器人。不要自行扩展全文抓取或其他聊天平台。
 
 ## 关键不变量
 
@@ -24,5 +24,9 @@
 4. 制造网络失败并重启，确认任务恢复；换成正确签名密钥后手动重试同事件。
 5. 在可丢弃 Linux VM 验证卸载预览、默认卸载后重装、彻底卸载、重复卸载、真实账户和 systemd 状态；同时测试旧安装缺少归属记录时保留账户。
 
-当前 schema=1，依赖由 `uv.lock` 锁定。修改 schema 前设计迁移和回滚，先备份。
+当前 schema=2，从 1 自动加表迁移并保留数据库快照，完整回退必须使用含凭据的升级前备份。依赖由 `uv.lock` 锁定。
+
+Docker 运行同一镜像的 web/worker 服务，共享本地数据卷，worker 凭据卷只读；始终只有一个 worker。管理页面全部本地资源，所有写入需认证与 CSRF。后台不能挂载 Docker socket 或执行宿主机命令。
+恢复使用 maintenance 文件及 data.lock：worker 持有共享锁，检测维护请求后结束在途任务并释放；恢复持有独占锁，保存 pre-restore 完整备份，失败回滚，保留维护模式等待管理员检查。CLI 业务写入也遵守共享锁和维护状态。恢复保留当前管理员密码，注销所有会话并暂停抓取/推送。
+本地执行完整 pytest、ruff、uv build；Linux Docker 环境额外执行 `RSS_WATCH_DOCKER_TEST=1 uv run pytest tests/test_docker.py`（隔离项目与数据卷，含重建保留数据、只读凭据、健康检查）。没有 Docker 时必须明确尚未实测容器启动，不把 CI 配置当作已通过的运行证据。
 本地 macOS 测试不能替代 Linux systemd 和真实飞书验收；交付时明确区分实际跑过的测试与待目标环境完成的检查。

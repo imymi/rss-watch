@@ -9,3 +9,8 @@ dist/
 config.toml
 credentials/
 *.sqlite3
+.env
+data/
+backups/
+*.sqlite3-wal
+*.sqlite3-shm

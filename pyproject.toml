@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rss-watch"
-version = "0.1.0"
-description = "Linux RSS keyword monitor with a Chinese CLI and Feishu notifications"
+version = "0.2.0"
+description = "RSS keyword monitor with a Chinese admin dashboard and Feishu notifications"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,10 +13,16 @@ dependencies = [
   "rich>=14,<15",
   "httpx>=0.28,<0.29",
   "feedparser>=6.0.11,<7",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "jinja2>=3.1.6,<4",
+  "python-multipart>=0.0.20,<1",
+  "tzdata>=2025.2,<2028",
 ]
 
 [project.scripts]
 rss-watch = "rss_watch.cli:main"
+rss-watch-container = "rss_watch.container:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.26,<2", "ruff>=0.11,<1"]

@@ -14,3 +14,15 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
       - run: uv build
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -q tests/test_docker.py
+        env:
+          RSS_WATCH_DOCKER_TEST: '1'

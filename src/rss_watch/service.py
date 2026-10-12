@@ -5,6 +5,7 @@ import os
 import shutil
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from .config import (
@@ -12,11 +13,14 @@ from .config import (
     credential_path,
     file_lock,
     open_credential,
+    read_credential,
     validate_url,
     write_credential,
 )
-from .db import Database
+from .db import SCHEMA_VERSION, Database
 from .domain import match, normalize_word
+from .maintenance import business_write, data_lock
+from .settings import read_settings
 
 
 def required(value: str, label: str) -> str:
@@ -34,15 +38,19 @@ class Service:
     def source_list(self) -> list[dict]:
         return self.db.rows("SELECT * FROM sources WHERE deleted=0 ORDER BY id")
 
-    def source_save(self, name: str, url: str, interval: int = 300, id: int | None = None):
+    @business_write
+    def source_save(self, name: str, url: str, interval: int | None = None, id: int | None = None):
         name = required(name, "名称")
         validate_url(url)
+        settings = read_settings(self.db)
+        if interval is None:
+            interval = settings["default_interval"]
         if interval < 60:
             raise ValueError("抓取间隔至少为 60 秒")
         with self.db.transaction() as db:
             if id is None:
-                if db.execute("SELECT count(*) FROM sources WHERE deleted=0").fetchone()[0] >= 100:
-                    raise ValueError("第一版最多支持 100 个订阅源")
+                if db.execute("SELECT count(*) FROM sources WHERE deleted=0").fetchone()[0] >= settings["max_sources"]:
+                    raise ValueError(f"最多支持 {settings['max_sources']} 个订阅源")
                 return db.execute(
                     "INSERT INTO sources(name,url,interval) VALUES (?,?,?)", (name, url, interval)
                 ).lastrowid
@@ -57,6 +65,7 @@ class Service:
             )
             return id
 
+    @business_write
     def source_enable(self, id: int, enabled: bool):
         with self.db.transaction() as db:
             result = db.execute(
@@ -66,6 +75,7 @@ class Service:
             if not result.rowcount:
                 raise ValueError("订阅源不存在")
 
+    @business_write
     def source_delete(self, id: int):
         with self.db.transaction() as db:
             result = db.execute(
@@ -86,6 +96,7 @@ class Service:
         ):
             path.unlink(missing_ok=True)
 
+    @business_write
     def bot_save(self, name: str, webhook: str, secret: str = "", id: int | None = None):
         name = required(name, "名称")
         with file_lock(self.config.data_dir / "admin.lock"):
@@ -117,6 +128,7 @@ class Service:
                 self._remove_unused_credential(old_ref)
             return id
 
+    @business_write
     def bot_delete(self, id: int):
         with file_lock(self.config.data_dir / "admin.lock"):
             with self.db.transaction() as db:
@@ -139,6 +151,7 @@ class Service:
     def rule_list(self) -> list[dict]:
         return self.db.rows("SELECT * FROM rules ORDER BY id")
 
+    @business_write
     def rule_save(self, name: str, includes: list[str], excludes: list[str], mode: str,
                   source_ids: list[int], bot_id: int, id: int | None = None):
         name = required(name, "名称")
@@ -176,11 +189,13 @@ class Service:
                 raise ValueError("规则不存在")
             return id
 
+    @business_write
     def rule_enable(self, id: int, enabled: bool):
         with self.db.transaction() as db:
             if not db.execute("UPDATE rules SET enabled=? WHERE id=?", (int(enabled), id)).rowcount:
                 raise ValueError("规则不存在")
 
+    @business_write
     def rule_delete(self, id: int):
         with self.db.transaction() as db:
             if not db.execute("DELETE FROM rules WHERE id=?", (id,)).rowcount:
@@ -192,6 +207,7 @@ class Service:
             raise ValueError("规则不存在")
         return match(rows[0], title, summary)
 
+    @business_write
     def bot_test(self, id: int) -> str:
         event = str(uuid.uuid4())
         now = time.time()
@@ -215,6 +231,7 @@ class Service:
             + "ORDER BY created DESC LIMIT ?", (state, limit) if state else (limit,)
         )
 
+    @business_write
     def retry(self, event_id: str):
         with self.db.transaction() as db:
             if not db.execute(
@@ -240,9 +257,20 @@ class Service:
             ),
         }
 
-    def backup(self, destination: Path):
+    def health(self):
+        with self.db.connect() as db:
+            database = db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        errors = []
+        for bot in self.db.rows("SELECT id,credential_ref FROM bots WHERE deleted=0"):
+            try:
+                read_credential(self.config, bot["credential_ref"])
+            except (OSError, ValueError, KeyError, TypeError):
+                errors.append(bot["id"])
+        return {"database_ok": database, "credential_errors": errors}
+
+    def backup(self, destination: Path, *, _locked: bool = False):
         # Administrative lock freezes credential references; daemon writes remain online.
-        with file_lock(self.config.data_dir / "admin.lock"):
+        with (nullcontext() if _locked else data_lock(self.config)), file_lock(self.config.data_dir / "admin.lock"):
             destination.mkdir(mode=0o700, parents=True, exist_ok=False)
             try:
                 self.db.backup(destination / "rss-watch.sqlite3")
@@ -259,10 +287,11 @@ class Service:
                             shutil.copyfileobj(source, output)
                 (destination / "rss-watch.sqlite3").chmod(0o600)
                 (destination / "manifest.json").write_text(json.dumps({
-                    "schema_version": 1, "created": time.time(),
+                    "schema_version": SCHEMA_VERSION, "created": time.time(),
                     "data_dir": str(self.config.data_dir),
                     "credentials_dir": str(self.config.credentials_dir),
                 }, indent=2))
+                (destination / "manifest.json").chmod(0o600)
             except BaseException:
                 shutil.rmtree(destination)
                 raise

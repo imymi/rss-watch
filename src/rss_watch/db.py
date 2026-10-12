@@ -5,6 +5,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+SCHEMA_VERSION = 2
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
  id INTEGER PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL,
@@ -44,6 +46,16 @@ CREATE TABLE IF NOT EXISTS deliveries (
 CREATE INDEX IF NOT EXISTS delivery_due ON deliveries(state, next_attempt);
 CREATE INDEX IF NOT EXISTS article_age ON articles(discovered);
 CREATE TABLE IF NOT EXISTS runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS admins (
+ id INTEGER PRIMARY KEY CHECK(id=1), username TEXT NOT NULL, password_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+ token_hash TEXT PRIMARY KEY, expires REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit (
+ id INTEGER PRIMARY KEY, created REAL NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL
+);
 """
 
 
@@ -53,10 +65,23 @@ class Database:
         with self.connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, SCHEMA_VERSION):
                 raise ValueError("数据库版本不兼容，请使用匹配版本的软件")
-            connection.executescript(SCHEMA)
-            connection.execute("PRAGMA user_version=1")
+            if version == SCHEMA_VERSION:
+                return
+            # Keep a rollback snapshot before the additive v1 -> v2 migration.
+            if version == 1:
+                snapshot = path.with_name(f"migration-v1-{time.time_ns()}.sqlite3")
+                target = sqlite3.connect(snapshot)
+                try:
+                    connection.backup(target)
+                finally:
+                    target.close()
+                snapshot.chmod(0o600)
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + SCHEMA
+                + f"\nPRAGMA user_version={SCHEMA_VERSION};\nCOMMIT;"
+            )
 
     @contextmanager
     def connect(self):
@@ -88,9 +113,11 @@ class Database:
             db.execute("INSERT OR REPLACE INTO runtime VALUES ('heartbeat', ?)", (str(time.time()),))
             db.execute("INSERT OR REPLACE INTO runtime VALUES ('running', ?)", (str(int(running)),))
 
-    def cleanup(self, now: float) -> None:
-        cutoff = now - 90 * 86400
+    def cleanup(self, now: float, retention_days: int = 90) -> None:
+        cutoff = now - retention_days * 86400
         with self.transaction() as db:
+            db.execute("DELETE FROM sessions WHERE expires < ?", (now,))
+            db.execute("DELETE FROM audit WHERE created < ?", (cutoff,))
             db.execute("DELETE FROM deliveries WHERE state='sent' AND updated < ?", (cutoff,))
             db.execute(
                 """UPDATE articles SET title=NULL, summary=NULL, link=NULL, published=NULL

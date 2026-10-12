@@ -18,6 +18,9 @@ import httpx
 from .config import Config, file_lock, read_credential
 from .db import Database
 from .domain import match, message, parse_feed
+from .maintenance import active as maintenance_active
+from .maintenance import data_lock
+from .settings import FIELDS, NETWORK_KEYS, read_settings
 
 log = logging.getLogger("rss_watch")
 MAX_BODY = 5 * 1024 * 1024
@@ -50,13 +53,14 @@ class DeliveryError(Exception):
         self.delay = delay
 
 
-async def send_feishu(client: httpx.AsyncClient, credential: dict, text: str):
+async def send_feishu(client: httpx.AsyncClient, credential: dict, text: str,
+                     deadline: float | None = None):
     payload = {"msg_type": "text", "content": {"text": text}}
     if credential["secret"]:
         timestamp = str(int(time.time()))
         payload.update(timestamp=timestamp, sign=signature(timestamp, credential["secret"]))
     try:
-        async with asyncio.timeout(REQUEST_DEADLINE):
+        async with asyncio.timeout(REQUEST_DEADLINE if deadline is None else deadline):
             # Do not follow webhook redirects or log response text (may echo secrets).
             async with client.stream(
                 "POST", credential["webhook"], json=payload, follow_redirects=False
@@ -94,17 +98,27 @@ class Worker:
         self.db = Database(config.database)
         self.client = client
         self.stopping = asyncio.Event()
+        self.settings = read_settings(self.db)
+        self.network_settings = tuple(self.settings[k] for k in NETWORK_KEYS)
+
+    def setting(self, key, fallback):
+        value = self.settings[key]
+        return fallback if value == FIELDS[key].default else value
+
+    def retry_delay(self, attempt):
+        delays = [int(value) for value in self.settings["retry_delays"].split(",")]
+        return delays[min(attempt - 1, len(delays) - 1)]
 
     async def fetch(self, source: dict):
         try:
-            headers = {"User-Agent": "rss-watch/0.1 (+RSS keyword monitor)",
+            headers = {"User-Agent": "rss-watch/0.2 (+RSS keyword monitor)",
                        "Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"}
             if source["initialized"]:
                 if source["etag"]:
                     headers["If-None-Match"] = source["etag"]
                 if source["modified"]:
                     headers["If-Modified-Since"] = source["modified"]
-            async with asyncio.timeout(REQUEST_DEADLINE):
+            async with asyncio.timeout(self.setting("request_deadline", REQUEST_DEADLINE)):
                 async with self.client.stream(
                     "GET", source["url"], headers=headers, follow_redirects=True
                 ) as response:
@@ -117,7 +131,7 @@ class Worker:
                     body = bytearray()
                     async for chunk in response.aiter_bytes():
                         body.extend(chunk)
-                        if len(body) > MAX_BODY:
+                        if len(body) > self.setting("max_body_mib", MAX_BODY / (1024 * 1024)) * 1024 * 1024:
                             raise ValueError("订阅响应超过 5 MiB")
                     articles = await asyncio.to_thread(parse_feed, bytes(body), str(response.url))
                     self.commit_feed(source, articles, response.headers, time.time())
@@ -188,7 +202,8 @@ class Worker:
             db.execute(
                 """UPDATE sources SET failures=failures+1,last_error=?,next_fetch=?
                    WHERE id=? AND revision=? AND deleted=0 AND enabled=1""",
-                (reason, now + min(3600, source["interval"] * 2 ** min(source["failures"], 10)),
+                (reason, now + min(self.settings["fetch_backoff_max"],
+                                   source["interval"] * 2 ** min(source["failures"], 10)),
                  source["id"], source["revision"]),
             )
         log.warning("源 %s：%s", source["id"], reason)
@@ -196,12 +211,14 @@ class Worker:
     def recover(self):
         with self.db.transaction() as db:
             db.execute(
-                """UPDATE deliveries SET state=CASE WHEN attempts>=5 THEN 'failed' ELSE 'pending' END,
+                """UPDATE deliveries SET state=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,
                    last_error='上次发送中断，可能已被接收',updated=? WHERE state='sending'""",
-                (time.time(),),
+                (self.settings["max_attempts"], time.time()),
             )
 
     async def deliver_one(self) -> bool:
+        if self.settings["delivery_paused"] or maintenance_active(self.config):
+            return False
         now = time.time()
         with self.db.transaction() as db:
             row = db.execute(
@@ -212,12 +229,17 @@ class Worker:
             if row is None:
                 return False
             delivery = dict(row)
+            if delivery["attempts"] >= self.settings["max_attempts"]:
+                db.execute("UPDATE deliveries SET state='failed',updated=?,last_error=? WHERE id=?",
+                           (now, "已达到当前发送次数上限", delivery["id"]))
+                return True
             attempt = delivery["attempts"] + 1
             db.execute(
                 "UPDATE deliveries SET state='sending',attempts=?,updated=?,next_attempt=? WHERE id=?",
-                (attempt, now, now + RETRY_DELAYS[min(attempt - 1, 3)], delivery["id"]),
+                (attempt, now, now + self.retry_delay(attempt), delivery["id"]),
             )
-            db.execute("UPDATE bots SET next_send=? WHERE id=?", (now + 1, delivery["bot_id"]))
+            db.execute("UPDATE bots SET next_send=? WHERE id=?",
+                       (now + self.settings["send_interval"], delivery["bot_id"]))
             # Load before releasing the transaction so credential rotation cannot unlink it first.
             try:
                 credential = read_credential(self.config, delivery["credential_ref"])
@@ -226,11 +248,12 @@ class Worker:
         try:
             if credential is None:
                 raise DeliveryError("凭据不可读、权限不是 0600 或格式无效", False) from None
-            await send_feishu(self.client, credential, delivery["payload"])
+            await send_feishu(self.client, credential, delivery["payload"],
+                             self.setting("request_deadline", REQUEST_DEADLINE))
         except DeliveryError as error:
             now = time.time()
-            retry = error.transient and attempt < 5
-            delay = max(RETRY_DELAYS[min(attempt - 1, 3)], error.delay)
+            retry = error.transient and attempt < self.settings["max_attempts"]
+            delay = max(self.retry_delay(attempt), error.delay)
             with self.db.transaction() as db:
                 db.execute(
                     """UPDATE deliveries SET state=?,next_attempt=?,updated=?,last_error=?
@@ -239,7 +262,7 @@ class Worker:
                 )
                 # Honor remote rate limiting across all queued messages for this bot.
                 db.execute("UPDATE bots SET next_send=max(next_send,?) WHERE id=?",
-                           (now + max(1, error.delay), delivery["bot_id"]))
+                           (now + max(self.settings["send_interval"], error.delay), delivery["bot_id"]))
             log.warning("推送 %s：%s", delivery["id"], error)
         else:
             with self.db.transaction() as db:
@@ -248,7 +271,7 @@ class Worker:
                     (time.time(), delivery["id"]),
                 )
                 db.execute("UPDATE bots SET next_send=max(next_send,?) WHERE id=?",
-                           (time.time() + 1, delivery["bot_id"]))
+                           (time.time() + self.settings["send_interval"], delivery["bot_id"]))
         return True
 
     async def delivery_loop(self):
@@ -260,9 +283,17 @@ class Worker:
         self.recover()
         active: dict[int, asyncio.Task] = {}
         sender = asyncio.create_task(self.delivery_loop())
-        next_cleanup = 0.0
+        last_cleanup = None
         try:
             while not self.stopping.is_set():
+                if maintenance_active(self.config):
+                    return
+                self.settings = read_settings(self.db)
+                if tuple(self.settings[k] for k in NETWORK_KEYS) != self.network_settings:
+                    return  # daemon recreates the HTTP client before marking settings applied
+                with self.db.transaction() as db:
+                    db.execute("INSERT OR REPLACE INTO runtime VALUES ('settings_applied', "
+                               "COALESCE((SELECT value FROM runtime WHERE key='settings_revision'), ''))")
                 if sender.done():
                     sender.result()
                 for id, task in list(active.items()):
@@ -271,14 +302,17 @@ class Worker:
                         del active[id]
                 now = time.time()
                 self.db.heartbeat()
-                if now >= next_cleanup:
-                    self.db.cleanup(now)
-                    next_cleanup = now + 86400
+                if last_cleanup is None or now - last_cleanup >= self.settings["cleanup_hours"] * 3600:
+                    self.db.cleanup(now, self.settings["retention_days"])
+                    last_cleanup = now
+                if self.settings["fetch_paused"]:
+                    await asyncio.sleep(1)
+                    continue
                 for source in self.db.rows(
                     "SELECT * FROM sources WHERE enabled=1 AND deleted=0 AND next_fetch<=? "
                     "ORDER BY next_fetch,id", (now,)
                 ):
-                    if len(active) >= 5:
+                    if len(active) >= self.settings["fetch_concurrency"]:
                         break
                     if source["id"] not in active:
                         active[source["id"]] = asyncio.create_task(self.fetch(source))
@@ -295,19 +329,56 @@ class Worker:
             self.db.heartbeat(False)
 
 
+def http_client(settings: dict) -> httpx.AsyncClient:
+    mounts = {}
+    for scheme in ("http", "https"):
+        proxy = settings[f"{scheme}_proxy"]
+        if proxy:
+            mounts[f"{scheme}://"] = httpx.AsyncHTTPTransport(proxy=proxy)
+    for host in settings["no_proxy"].split(","):
+        host = host.strip()
+        if not host:
+            continue
+        if host == "*":
+            mounts = {}
+            break
+        host = host.lstrip(".")
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        mounts[f"all://{host}"] = None
+        if ":" not in host:
+            mounts[f"all://*.{host}"] = None
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(settings["request_deadline"], connect=settings["connect_timeout"]),
+        max_redirects=5,
+        limits=httpx.Limits(max_connections=FIELDS["fetch_concurrency"].maximum + 2),
+        mounts=mounts, trust_env=settings["no_proxy"] != "*",
+    )
+
+
 async def run_daemon(config: Config):
     with file_lock(config.data_dir / "daemon.lock", blocking=False):
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(20, connect=10), max_redirects=5,
-            limits=httpx.Limits(max_connections=10),
-        ) as client:
-            worker = Worker(config, client)
-            loop = asyncio.get_running_loop()
+        stopping = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(signum, stopping.set)
+        log.info("RSS Watch 启动：%s", datetime.now(timezone.utc).isoformat())
+        try:
+            while not stopping.is_set():
+                if maintenance_active(config):
+                    try:
+                        await asyncio.wait_for(stopping.wait(), timeout=1)
+                    except TimeoutError:
+                        pass
+                    continue
+                with data_lock(config):
+                    if maintenance_active(config):
+                        continue
+                    settings = read_settings(Database(config.database))
+                    async with http_client(settings) as client:
+                        worker = Worker(config, client)
+                        worker.stopping = stopping
+                        await worker.run()
+        finally:
             for signum in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(signum, worker.stopping.set)
-            log.info("RSS Watch 启动：%s", datetime.now(timezone.utc).isoformat())
-            try:
-                await worker.run()
-            finally:
-                for signum in (signal.SIGINT, signal.SIGTERM):
-                    loop.remove_signal_handler(signum)
+                loop.remove_signal_handler(signum)

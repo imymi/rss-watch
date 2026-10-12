@@ -97,7 +97,7 @@ def credential_path(config: Config, ref: str) -> Path:
 
 @contextmanager
 def open_credential(config: Config, ref: str):
-    fd = os.open(credential_path(config, ref), os.O_RDONLY | os.O_NOFOLLOW)
+    fd = os.open(credential_path(config, ref), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as f:
         info = os.fstat(f.fileno())
         if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:

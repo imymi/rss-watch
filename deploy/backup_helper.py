@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import stat
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -66,9 +67,9 @@ def _backup_database_and_credentials(data_dir: Path, creds_dir: Path, dest: Path
     try:
         with sqlite3.connect(f"file:{src_db}?mode=ro", uri=True) as src:
             v = src.execute("PRAGMA user_version").fetchone()
-            if not v or v[0] != 1:
+            if not v or v[0] not in (1, 2):
                 print(
-                    f"FATAL: 数据库版本校验失败 (user_version={v[0] if v else 'None'}, 期望 1)",
+                    f"FATAL: 数据库版本校验失败 (user_version={v[0] if v else 'None'}, 期望 1 或 2)",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -115,7 +116,7 @@ def _backup_database_and_credentials(data_dir: Path, creds_dir: Path, dest: Path
 
     manifest_file = dest / "manifest.json"
     manifest_data = {
-        "schema_version": 1,
+        "schema_version": v[0],
         "type": "online_backup_fallback",
         "data_dir": str(data_dir.resolve()),
         "credentials_dir": str(creds_dir.resolve()),
@@ -139,9 +140,9 @@ def verify_backup(dest: Path) -> None:
         conn = sqlite3.connect(db_file)
         conn.row_factory = sqlite3.Row
         v = conn.execute("PRAGMA user_version").fetchone()
-        if not v or v[0] != 1:
+        if not v or v[0] not in (1, 2):
             print(
-                f"FATAL: 备份数据库版本校验失败 (user_version={v[0] if v else 'None'}, 期望 1)",
+                f"FATAL: 备份数据库版本校验失败 (user_version={v[0] if v else 'None'}, 期望 1 或 2)",
                 file=sys.stderr,
             )
             conn.close()
@@ -190,6 +191,47 @@ def verify_backup(dest: Path) -> None:
         sys.exit(1)
 
     print(f"备份校验全部通过: {dest}")
+
+
+def restore_if_migrated(data_dir: Path, creds_dir: Path, backup_dir: Path) -> None:
+    """Installer rollback only: caller must have successfully stopped the new service."""
+    database = data_dir / "rss-watch.sqlite3"
+    snapshot = backup_dir / "rss-watch.sqlite3"
+    with sqlite3.connect(snapshot.as_uri() + "?mode=ro&immutable=1", uri=True) as db:
+        old_version = db.execute("PRAGMA user_version").fetchone()[0]
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+        new_version = db.execute("PRAGMA user_version").fetchone()[0]
+    if old_version not in (1, 2) or new_version not in (1, 2):
+        raise ValueError("数据库版本不兼容，拒绝自动回滚")
+    if old_version == new_version:
+        return
+    verify_backup(backup_dir)
+    # Freeze new CLI writes as well as credential changes; the service is already stopped.
+    with file_lock(data_dir / "data.lock"), file_lock(data_dir / "admin.lock"):
+        for lock in ("data.lock", "admin.lock"):
+            if os.geteuid() == 0:
+                owner = data_dir.stat()
+                os.chown(data_dir / lock, owner.st_uid, owner.st_gid)
+        with sqlite3.connect(snapshot.as_uri() + "?mode=ro&immutable=1", uri=True) as source:
+            refs = source.execute("SELECT DISTINCT credential_ref FROM bots WHERE deleted=0")
+            owner = creds_dir.stat()
+            for (ref,) in refs:
+                fd, name = tempfile.mkstemp(prefix=".rollback-", dir=creds_dir)
+                temporary = Path(name)
+                try:
+                    with os.fdopen(fd, "wb") as output:
+                        if os.geteuid() == 0:
+                            os.fchown(output.fileno(), owner.st_uid, owner.st_gid)
+                        with open_credential(backup_dir / "credentials", ref) as credential:
+                            shutil.copyfileobj(credential, output)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(temporary, credential_path(creds_dir, ref))
+                finally:
+                    temporary.unlink(missing_ok=True)
+            with sqlite3.connect(database) as target:
+                source.backup(target)
+    print(f"已恢复升级前数据库 schema {old_version} 与活动凭据")
 
 
 def migrate_legacy_files(target_dir: Path, legacy_dir: Path) -> None:
@@ -241,6 +283,11 @@ def main() -> None:
     verify_parser = subparsers.add_parser("verify", help="Verify backup integrity and credentials")
     verify_parser.add_argument("dest", type=Path)
 
+    rollback_parser = subparsers.add_parser("restore-if-migrated", help="Restore schema on failed upgrade")
+    rollback_parser.add_argument("data_dir", type=Path)
+    rollback_parser.add_argument("creds_dir", type=Path)
+    rollback_parser.add_argument("backup_dir", type=Path)
+
     migrate_parser = subparsers.add_parser(
         "migrate-legacy", help="Move legacy single-directory files to archive"
     )
@@ -259,6 +306,8 @@ def main() -> None:
         backup_database_and_credentials(args.data_dir, args.creds_dir, args.dest)
     elif args.action == "verify":
         verify_backup(args.dest)
+    elif args.action == "restore-if-migrated":
+        restore_if_migrated(args.data_dir, args.creds_dir, args.backup_dir)
     elif args.action == "migrate-legacy":
         migrate_legacy_files(args.target_dir, args.legacy_dir)
     elif args.action == "restore-legacy":

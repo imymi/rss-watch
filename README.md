@@ -1,330 +1,317 @@
 # RSS Watch
 
-Linux 单机 RSS/Atom 关键词监控，中文交互式 CLI，飞书群自定义机器人推送。
-Python 3.12+，SQLite，无 Web 服务、Redis 或外部数据库。默认每 5 分钟抓取，最多 100 个源。
+RSS / Atom 关键词监控工具。定时检查订阅标题，命中规则后发送到飞书群，支持中文管理后台、持久化推送队列和完整备份。
+
+**v0.2.0 推荐使用 Docker Compose 部署。** Python 3.12+，SQLite；管理页面和静态资源随镜像提供。
+
+[发布版本](https://github.com/imymi/rss-watch/releases) · [测试状态](https://github.com/imymi/rss-watch/actions/workflows/tests.yml) · [更新记录](CHANGELOG.md)
+
+## 版本选择
+
+| 版本 | 部署与管理方式 | 数据库 | 获取 |
+| --- | --- | --- | --- |
+| **v0.2.0** | Docker Compose、中文网页后台，保留 CLI 和 systemd 部署 | schema 2 | [新版发布](https://github.com/imymi/rss-watch/releases/tag/v0.2.0) |
+| **v0.1.0** | 原版 Linux / systemd、中文数字菜单和 CLI | schema 1 | [原版发布](https://github.com/imymi/rss-watch/releases/tag/v0.1.0)、[原版分支](https://github.com/imymi/rss-watch/tree/v0.1) |
+
+原版完整源码保存在 `v0.1` 分支和 `v0.1.0` 标签中；新版位于 `main`，`v0.2.0` 标签固定本次发布。两个版本分别提供发布入口，原版的代码、依赖锁文件和 README 保持原样。
+
+```sh
+# 获取原版
+git clone --branch v0.1.0 --depth 1 https://github.com/imymi/rss-watch.git rss-watch-v0.1
+```
+
+v0.2 能导入 v0.1 的完整备份。v0.1 不能直接读取 schema 2 数据库；回退必须恢复升级前的 schema 1 完整备份。
+
+## 快速部署
+
+准备 Docker Engine、Docker Compose 插件，以及可访问订阅地址和飞书接口的网络。首次构建会下载 Python 基础镜像、uv 和锁定依赖。
+
+```sh
+git clone --branch v0.2.0 --depth 1 https://github.com/imymi/rss-watch.git
+cd rss-watch
+cp .env.example .env
+docker compose up --build -d
+docker compose exec web cat /data/bootstrap-token
+```
+
+打开 **http://127.0.0.1:8080**，用最后一条命令显示的一次性口令创建管理员，再登录。密码至少 12 个字符；口令使用后删除，不写入运行日志。
+
+如果部署在服务器上，需要局域网直接访问，在 `.env` 中设置：
+
+```dotenv
+RSS_WATCH_BIND=0.0.0.0
+RSS_WATCH_PORT=8080
+```
+
+执行 `docker compose up -d`，访问 `http://服务器地址:8080`。默认配置仅绑定部署机器的回环地址。
+
+第一次使用按这个顺序配置：
+
+1. 添加飞书群自定义机器人。
+2. 添加 RSS / Atom 订阅地址。
+3. 创建关键词规则，选择来源范围和目标机器人。
+4. 在总览确认监控在线，在推送历史查看通知。
+
+**新订阅第一次成功抓取只建立基线，不推送已有文章。** 此后首次发现的匹配文章才会产生通知。
+
+## 管理后台
+
+![管理后台总览（示例数据，未运行监控进程）](docs/assets/dashboard.jpg)
+
+| 页面 | 可管理内容 |
+| --- | --- |
+| 总览 | 监控心跳、源/规则/机器人数量、推送队列、最近异常；队列与在线状态每 5 秒刷新 |
+| 订阅源 | 添加、编辑名称和间隔、启用/停用、删除，查看初始化状态、最近成功时间和错误 |
+| 关键词规则 | 包含词、排除词、任一/全部匹配、来源范围、目标机器人、启停、删除和标题测试 |
+| 飞书机器人 | 名称、Webhook、签名密钥、发送测试消息、删除 |
+| 推送历史 | 按状态/机器人筛选、分页、完整消息、命中规则、错误原因、失败任务重试 |
+| 系统设置 | 抓取与网络参数、代理、重试与限流、历史保留、自动备份、时区、管理员密码 |
+| 运维与备份 | 暂停/恢复抓取和推送、数据库/凭据检查、运行日志、管理操作记录、在线备份、下载与恢复 |
+
+规则关键词在网页里**每行一个**。来源不选择表示全部订阅源；清空已有来源范围时需要勾选确认。
+
+编辑机器人时，Webhook 留空保留现有凭据。填写新 Webhook 时，签名密钥留空表示关闭加签。已有凭据不会返回页面或机器人列表 API。
+
+### 飞书配置
+
+使用飞书群设置中的**自定义机器人**，无需 App ID / App Secret。复制机器人的 HTTPS Webhook，可选填写签名密钥。
+
+- 启用飞书关键词校验时，允许词应包含 `RSS 命中提醒`。
+- 启用签名校验时，在后台填写对应密钥。
+- 使用 IP 白名单时，填写服务器出口 IP。
+- “测试消息”会真实发送到目标群，并经过同一持久队列、限流与重试机制。
+
+机器人仍被规则引用，或者存在未完成/失败任务时，不能删除。
+
+## 运行设置
+
+业务配置保存在数据库中，可在后台修改。worker 每秒读取设置；网络配置改变时重建 HTTP 客户端，页面显示设置是否仍待应用。部署端口、卷挂载和容器升级由 Compose 管理。
+
+| 设置 | 默认值 | 可设置范围或说明 |
+| --- | --- | --- |
+| 新订阅默认抓取间隔 | 300 秒 | 60–86400 秒；已有源使用自己的间隔 |
+| 订阅源数量上限 | 100 | 1–1000 |
+| 抓取并发数 | 5 | 1–20 |
+| 连接超时 / 请求总时限 | 10 / 30 秒 | 1–120 / 1–300 秒 |
+| 解压后订阅响应上限 | 5 MiB | 1–50 MiB |
+| HTTP / HTTPS 代理 | 空 | 留空沿用部署环境；支持 HTTP/HTTPS 代理地址 |
+| 代理排除地址 | 空 | 逗号分隔的主机名或 IP；`*` 全部直连；该字段不支持 CIDR |
+| 最多发送次数 | 5 次，含首次 | 1–10 |
+| 重试间隔 | 30、120、600、1800 秒 | 1–10 个间隔；超出数量沿用最后一个 |
+| 每机器人发送间隔 | 1 秒 | 1–60 秒 |
+| 抓取失败退避上限 | 3600 秒 | 60–86400 秒 |
+| 已发送历史保留 | 90 天 | 1–3650 天 |
+| 历史清理周期 | 24 小时 | 1–168 小时 |
+| 自动备份周期 / 保留数量 | 24 小时 / 7 份 | 周期 0–720 小时，0 关闭；保留 1–100 份 |
+| 页面时区 | Asia/Shanghai | IANA 时区，例如 UTC |
+
+源数量与并发上限是允许配置的范围，实际承载量取决于服务器和订阅站点。调整这些参数时，应同时关注抓取错误和队列积压。
+
+**暂停抓取**后仍可发送已入队消息；**暂停推送**后仍可抓取并积累任务。暂停状态跨重启保留。在途请求可能完成；客户端切换造成的发送中断会按持久队列恢复。
+
+## Docker 配置与日常运维
+
+同一镜像运行两个服务：`web` 提供后台和自动备份，`worker` 抓取订阅并推送。关闭网页或重启 web 不会停止 worker；web 停机期间自动备份调度暂停。
+
+| `.env` 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| RSS_WATCH_BIND | 127.0.0.1 | 宿主机监听地址 |
+| RSS_WATCH_PORT | 8080 | 宿主机端口 |
+| RSS_WATCH_VERSION | local | **本地构建镜像的标签**，不会自动下载发布镜像 |
+| TZ | Asia/Shanghai | 容器时区；页面时区另在后台设置 |
+| RSS_WATCH_SECURE_COOKIES | 0 | HTTPS 访问时设为 1 |
+| RSS_WATCH_TRUSTED_PROXIES | 127.0.0.1 | 实际反向代理地址，多个地址逗号分隔 |
+
+使用 HTTPS 反向代理时，设置 Secure Cookie 和实际可信代理地址；代理转发到 web 的 8080 端口。设置 Secure Cookie 后应使用 HTTPS 访问。
+
+```sh
+docker compose ps
+docker compose logs --tail 100 worker
+docker compose exec worker rss-watch-container check-worker
+docker compose exec web rss-watch --config /app/container.toml status
+docker compose restart worker
+docker compose down
+```
+
+应用以 UID/GID `10001` 运行，根文件系统只读。数据使用两个命名卷：
+
+| 卷 | 容器位置 | 内容 |
+| --- | --- | --- |
+| rss-data | /data | SQLite、设置、会话、日志、备份 |
+| rss-credentials | /credentials | 飞书凭据；worker 中只读 |
+
+Compose 默认项目名为 `rss-watch`，实际卷名带项目前缀。`docker compose down` 保留卷；**`docker compose down --volumes` 会删除数据和凭据**。迁移或重装时保持项目名及卷配置一致。
+
+改用绑定目录时，准备专属目录并设置归属 `10001:10001`、权限 `0700`，凭据文件保持 `0600`。SQLite 必须放在本机文件系统上，不能依赖跨机器共享 WAL 的网络文件系统。每套数据只运行一个 worker，不要扩容 worker。
+
+健康检查显示状态；Docker 不会仅因为 `unhealthy` 自动重启，进程异常退出由重启策略恢复。暂停监控和维护模式属于预期状态。运行日志按服务轮转，每个服务最多保留 4 个 1 MiB 文件。
+
+## 备份、恢复与版本迁移
+
+### 创建备份
+
+在“运维与备份”点击“立即备份”，然后下载 ZIP。备份包含数据库、设置和活动机器人凭据，也包含密钥，应限制访问。
+
+自动备份默认每 24 小时执行，保留最近 7 份。数量限制只清理 `auto-` 备份；手动备份和恢复前的 `pre-restore-` 备份需自行删除。
+
+### 从 v0.1 / systemd 迁移到 v0.2 Docker
+
+1. 停止旧服务，退出所有管理 CLI，使用旧版本生成最终完整备份：
+
+   ```sh
+   sudo systemctl stop rss-watch
+   rss-watch backup /绝对路径/完整备份目录
+   ```
+
+2. 在完整备份目录中，用有权限读取备份的用户打包并下载到管理电脑：
+
+   ```sh
+   python3 -m zipfile -c /安全路径/rss-watch-import.zip rss-watch.sqlite3 manifest.json credentials
+   ```
+
+3. 部署 v0.2，在后台创建管理员，进入“运维与备份”，上传 ZIP，输入“恢复”确认。
+4. 恢复后重新登录，检查订阅、规则、机器人、基线和推送历史。
+5. 点击“退出维护模式”，再分别恢复抓取和推送。
+
+导入保留文章指纹、源初始化状态和事件 ID，避免重新推送所有历史文章。旧服务与新 worker 不应同时监控同一套业务数据。
+
+### 恢复流程
+
+系统会先校验备份版本、数据库完整性和活动凭据集合，再进入维护模式，等待 worker 释放数据锁，保存当前完整备份，最后恢复。
+
+恢复失败会尝试回滚；意外中断时保持维护模式，恢复前备份名称保存在 `/data/maintenance`。恢复完成后保留当前管理员密码，注销旧会话，暂停抓取和推送，等待检查。应从后台退出维护模式，不要直接删除维护文件绕过检查。
+
+网页上传最多 **100 MiB**，解压后最多 **512 MiB**。更大的完整备份目录可只读挂载到 web 的 `/import`，确保 UID 10001 可读，再执行：
+
+```sh
+docker compose exec web rss-watch --config /app/container.toml restore /import --yes
+```
+
+CLI 与网页使用同一恢复流程。`--yes` 表示已确认覆盖当前业务数据。
+
+### 升级与回退
+
+升级前下载完整备份并保留当前源码/镜像版本。获取目标版本源码，沿用 `.env` 和原数据卷，再执行 `docker compose up --build -d`。
+
+schema 1 会自动加表迁移到 schema 2，迁移前另存 `migration-v1-*.sqlite3` 数据库快照。**数据库快照不含凭据，不能替代完整备份。**
+
+回退到 v0.1 时，停止新版服务，恢复升级前的 schema 1 数据库及对应凭据，再启动匹配的旧版程序。只换回旧代码或镜像而保留 schema 2 数据库，旧版无法启动。恢复旧备份也可能重新发送备份之后已送达的通知。
+
+## 监控与匹配行为
+
+- 匹配范围只有**标题**；摘要仅用于消息展示。包含词和排除词均为字面子串，采用 HTML 清理、NFKC 标准化和忽略大小写的比较，不使用正则、分词或词边界。
+- `any` 要求至少一个包含词命中，`all` 要求全部包含词命中；任一排除词命中即排除。
+- 第一次有效抓取建立基线，包括有效空源；畸形 XML 或抓取失败不会标记已初始化。
+- 文章按首次发现判断新增，不按发布时间过滤。身份优先使用 GUID / Atom ID，其次链接，最后标题和时间组合哈希；去重范围为单个源，同身份文章修改不重推。
+- 同一文章、同一机器人命中多条规则时合并通知。规则变更只影响之后发现的文章；已入队任务保留原消息快照。
+- URL 是订阅源身份。更换 URL 请删除旧源再新增，新源重新建立基线。停用、删除源不会撤销已入队任务；删除源保留原指纹和历史。
+- 使用 ETag / Last-Modified 条件请求，文章、命中、任务及验证信息在同一事务提交。轮询无法发现两次抓取之间已经从源中移除的文章。
+- 推送采用**至少一次投递**。远端可能已接收而本地超时，因此偶发重复仍可能发生；消息中的稳定事件编号用于识别重复。
+- 重试遵守更长的 `Retry-After`。签名和凭据等永久错误等待人工修复；手动重试重置尝试次数，保留事件编号。
+- 已发送任务和完整文章内容默认保留 90 天；精简指纹及未完成/失败任务继续保留。数据时间使用 Unix UTC，页面按所选时区显示。
+
+## CLI 与原生 Linux 部署
+
+Docker 中可直接调用 CLI：
+
+```sh
+docker compose exec web rss-watch --config /app/container.toml menu
+docker compose exec web rss-watch --config /app/container.toml source list --json
+docker compose exec web rss-watch --config /app/container.toml history --state failed --detail
+```
+
+原生 systemd 需要 Linux、Python 3.12+、uv、CA 证书和正确系统时间。在选定版本的源码目录执行 `sudo ./deploy/install.sh`；默认配置在 `/etc/rss-watch/config.toml`，数据在 `/var/lib/rss-watch`，代码在 `/opt/rss-watch/releases`，`current` 指向活动版本。
+
+安装器保留配置、数据和凭据，升级前创建并校验完整备份。新服务启动失败时先确认停止；若数据库版本已迁移，恢复旧 schema 和活动凭据，再回退代码并验证旧服务运行状态。
+
+```sh
+rss-watch menu
+rss-watch status --detail
+rss-watch check
+rss-watch logs
+rss-watch restart
+```
+
+`check`、`logs`、`restart` 等宿主机运维命令由 systemd 安装器提供；Docker 使用 Compose 命令管理容器。
+
+CLI 支持源/规则的 `add`、`update`、`enable`、`disable`、`delete`，机器人管理及测试，`rule test`、`history`、`delivery retry`、`backup`、`restore`。完整参数见 `rss-watch --help` 及各子命令帮助。
+
+原生卸载默认保留数据；执行前可预览：
+
+```sh
+sudo /opt/rss-watch/current/deploy/uninstall.sh --dry-run
+sudo /opt/rss-watch/current/deploy/uninstall.sh
+# 明确需要清空时，使用 --purge，并完成确认
+```
+
+原版详细菜单、systemd 安装与运维文档见 [v0.1 README](https://github.com/imymi/rss-watch/blob/v0.1/README.md)。
 
 ## 本地开发
-
-安装 Python 3.12 和 [uv](https://docs.astral.sh/uv/)，在项目目录执行：
 
 ```sh
 uv sync --locked --python 3.12
 uv run rss-watch --config "$PWD/.local/config.toml" init \
   --data-dir "$PWD/.local/data" --credentials-dir "$PWD/.local/credentials"
-export RSS_WATCH_CONFIG="$PWD/.local/config.toml"
-uv run rss-watch menu
-# 另一个终端，设置相同 RSS_WATCH_CONFIG 后执行：
-uv run rss-watch run
+uv run rss-watch-container web --config "$PWD/.local/config.toml"
+# 另一个终端
+uv run rss-watch --config "$PWD/.local/config.toml" run
 ```
 
-`menu` 与 `run` 是两个独立进程。退出菜单不会停止监控。后台每秒检查配置和维护心跳。
-路径优先级：`--config` > `RSS_WATCH_CONFIG` > `/etc/rss-watch/config.toml`；目录必须为绝对路径。
-`init` 只创建新配置，不覆盖已有文件。
-
-## Linux / systemd 部署
-
-适用带 systemd 的 Linux；预先安装 Python 3.12、uv、CA 证书与准确的系统时间。
-代码与虚拟环境默认位于 `/opt/rss-watch`。
-
-### 方式一：一键自动安装/升级（推荐）
-
-先确保部署机器的 `git` 已获准访问私有仓库 `imymi/rss-watch`，再复制下面整段命令。源码以当前用户身份拉取，只有安装脚本使用 `sudo`：
+本地后台监听 8080，初始化口令在 `.local/data/bootstrap-token`。`init` 不覆盖已有配置。配置优先级为 `--config`、`RSS_WATCH_CONFIG`、`/etc/rss-watch/config.toml`，目录须为绝对路径。
 
 ```sh
-(
-  src_dir="$(mktemp -d)" || exit
-  trap 'exit_status=$?; rm -rf -- "$src_dir" || :; exit "$exit_status"' EXIT
-  git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
-  sudo bash "$src_dir/deploy/install.sh"
-)
-```
-
-已有本地源码时，也可以在项目目录运行 `sudo ./deploy/install.sh`。不要把 GitHub 令牌写进命令或仓库地址。
-
-`deploy/install.sh` 具备幂等性与企业级安全保障：
-1. 自动检查 Linux/systemd、Python 3.12（强制校验未位于 `/home` 或 `/root`，避免 `ProtectHome=true` 拦截）和 `uv`；
-2. 自动创建 `rss-watch` 系统账户与所需目录结构；
-3. **升级前自动全量备份**：若检测到已有数据库，自动调用 SQLite 在线备份并强制校验数据库与所有有效凭据文件一致性；
-4. **固定版本目录与原子发布**：在 `/opt/rss-watch/releases/<release_id>` 中永久安装虚拟环境，通过原子切换 `/opt/rss-watch/current` 符号链接发布，彻底避免搬移虚拟环境导致 `bad interpreter` 错误；
-5. **安全捕获与可靠回滚**：新版本启动失败时，自动回滚符号链接并恢复旧服务运行，且严格校验旧服务恢复状态；
-6. 保留已有配置、凭据与历史数据库，配置安全权限（凭据 `0600`，目录 `0700`，代码只读），并重载启用 systemd 守护服务。
-
-### 方式二：手动分步安装
-
-将本项目放置在 `/opt/rss-watch/releases/initial` 并软链到 `/opt/rss-watch/current`：
-
-```sh
-sudo useradd --system --user-group --home-dir /var/lib/rss-watch --shell /usr/sbin/nologin rss-watch
-sudo mkdir -p /opt/rss-watch/releases/initial
-# 同步代码至 /opt/rss-watch/releases/initial
-sudo cp -r . /opt/rss-watch/releases/initial/
-cd /opt/rss-watch/releases/initial
-# 在项目目录具备写权限的部署账户执行；Python 解释器必须位于 /usr 或 /opt，
-# 不可引用 /home 下的解释器，否则 ProtectHome 会阻止服务运行。
-uv sync --locked --no-dev --python /usr/bin/python3.12
-sudo ln -sfn /opt/rss-watch/releases/initial /opt/rss-watch/current
-sudo install -d -m 0700 -o rss-watch -g rss-watch /etc/rss-watch /var/lib/rss-watch
-sudo -u rss-watch /opt/rss-watch/current/.venv/bin/rss-watch init
-sudo install -m 0644 deploy/rss-watch.service /etc/systemd/system/rss-watch.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now rss-watch
-sudo -u rss-watch /opt/rss-watch/current/.venv/bin/rss-watch menu
-```
-
-已有 `rss-watch` 系统账户时跳过 `useradd`。部署账户安装完成后，确保 `/opt/rss-watch` 及虚拟环境对服务账户可读、可执行；服务账户不需要修改代码的权限。
-
-### 服务健康自检
-
-安装后或日常运维可通过自带的自检脚本进行无干扰验证（**默认不发送任何真实消息**）：
-
-```sh
-sudo /opt/rss-watch/current/deploy/check.sh
-```
-
-自检脚本将依次校验：
-- systemd 单元处于 `active (running)` 状态且已启用自启；
-- 配置文件存在且目录/凭据权限严格合规（目录 `0700`，凭据物理文件 `0600`）；
-- 数据库可读写且 schema 为当前版本（1）；
-- 后台心跳处于 10 秒安全窗口内且标记为运行中；
-- 机器人绑定的凭据物理文件完整无缺损，URL 格式与密钥类型完全合规；
-- 订阅源与推送队列最近错误诊断（非零退出码标示致命故障）。
-
-日常查看命令：
-
-```sh
-sudo systemctl status rss-watch
-sudo journalctl -u rss-watch -n 100 --no-pager
-sudo -u rss-watch /opt/rss-watch/current/.venv/bin/rss-watch status
-```
-
-### 全局中文管理与运维入口
-
-`deploy/install.sh` 首次安装或升级成功后，自动创建 `/usr/local/bin/rss-watch`。无需激活虚拟环境或记住完整路径：
-
-```sh
-rss-watch                  # 中文数字管理菜单；退出不影响后台
-rss-watch status           # 中文状态概览
-rss-watch status --detail  # 展开错误详情
-rss-watch status --json    # 原始 JSON，供脚本使用
-rss-watch check            # 完整健康检查
-rss-watch service-status   # systemd 状态
-rss-watch logs             # 实时日志，Ctrl+C 退出
-rss-watch restart          # 重启服务
-rss-watch stop             # 停止监控
-rss-watch start            # 启动监控
-rss-watch --help           # 快捷入口帮助
-rss-watch cli-help         # 原始 CLI 完整帮助
-```
-
-原有 `source`、`rule`、`bot`、`history` 等业务子命令继续可用。菜单和业务命令自动以服务账户运行，运维写操作通过 root/sudo 执行；不修改 sudoers。入口使用安装时的配置路径和服务账户，并通过 `current` 跟随版本切换。普通账户可能需要 sudo 授权；激活虚拟环境时 PATH 可能优先选中原始 CLI，可退出虚拟环境或调用 `/usr/local/bin/rss-watch`。
-
-安装器在修改服务前检查同名命令；无法验证归属或内容被修改时保留并中止，不覆盖其他应用。可安全接管本项目此前在服务器创建、且完整文件指纹匹配的旧快捷入口。只有新版本服务启动成功后才原子更新入口，启动失败回滚保留旧入口。默认卸载和彻底卸载均移除可验证属于此安装的入口；dry-run 只显示计划，未知或修改过的入口保留并提示。
-
-此功能由安装脚本配置；直接 `pip install` 或 `uv sync` 仍提供原始 Python CLI，不安装系统运维入口。手工部署可在确认路径正确后以 root 执行 `python3.12 deploy/entry_helper.py /usr/local/bin/rss-watch /opt/rss-watch /etc/rss-watch/config.toml rss-watch`。
-
-服务只能写 `/var/lib/rss-watch`，凭据目录在服务的挂载命名空间内只读。CLI 通过 `sudo -u rss-watch` 管理凭据。
-服务不监听端口。仅出站访问订阅地址及飞书 API。HTTPX 默认支持 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 环境变量；后台需要通过 systemd override 设置相同环境。
-
-## 配置与命令
-
-建议顺序：添加飞书机器人 → 添加订阅源 → 添加关键词规则 → 启动服务。
-飞书使用群设置中的“自定义机器人”，无需应用 App ID/App Secret。可选安全设置“签名校验”；若启用关键词校验，将固定前缀 `RSS 命中提醒` 配为允许词。IP 白名单使用服务器出口 IP。
-
-```sh
-rss-watch bot add "研究通知"                  # 隐藏输入 webhook 和可选密钥
-rss-watch source add "示例订阅" https://example.com/feed.xml --interval 300
-rss-watch rule add "AI 动态" --bot 1 --include "人工智能" --include "AI" \
-  --exclude "广告" --mode any --source 1
-rss-watch bot test 1                         # 入队，由运行中的后台发送
-rss-watch rule test 1 "ＡＩ 最新消息" --summary "技术研究"
-rss-watch history --detail
-rss-watch history --state failed --json
-rss-watch delivery retry EVENT_ID
-```
-
-命令中的示例 ID 应替换成创建后返回的 ID。`--include`、`--exclude`、`--source` 可重复。
-包含词、排除词均只匹配标题，摘要不参与命中或排除判断，仅保留在通知中展示。
-匹配采用字面子串，不做分词、正则或词边界判断，例如 `bero` 可命中标题中的 `berostar`。
-标题去 HTML、解码实体、NFKC 标准化并忽略大小写；标题中任一排除词命中即排除。
-`any` 要求标题至少命中一个包含词，`all` 要求全部包含词都在标题中命中。
-已有规则无需重建，更新程序并重启后生效。
-
-| 命令 | 行为 |
-| --- | --- |
-| `source list [--json]` | 列出源、间隔、初始化与抓取状态 |
-| `source update ID [--name NAME] [--interval SECONDS]` | 修改名称和抓取间隔，至少 60 秒 |
-| `source enable/disable/delete ID` | 启用、停用或软删除源 |
-| `rule list [--json]` | 列出规则，包括源范围与目标机器人 |
-| `rule update ID NAME --bot ID --include WORD …` | 完整替换规则内容，保留启停状态 |
-| `rule enable/disable/delete ID` | 管理规则 |
-| `bot list [--json]` | 列出机器人 ID 和名称，不输出凭据 |
-| `bot update ID NAME` | 隐藏输入并替换凭据；空密钥关闭请求加签 |
-| `bot delete ID` | 无规则引用且无未完成/失败任务时才能删除 |
-| `history [--limit N] [--state STATE] [--detail] [--json]` | 查看任务、命中规则、消息及错误 |
-| `status [--detail] [--json]` | 默认显示中文状态概览；`--detail` 展开错误，`--json` 输出原始数据 |
-| `backup NEW_DIRECTORY` | SQLite 在线备份，包含凭据 |
-
-`rule update` 省略 `--exclude` 清空排除词，省略 `--source` 表示全部源。逗号菜单方便输入普通词；含逗号的字面关键词使用 CLI 的独立参数传入。
-
-数字菜单中，完成操作后留在当前分类，可连续管理；`0` 返回上级，主菜单 `0` 退出。填写表单时输入 `/取消` 或按 Ctrl+C 可取消当前操作，尚未保存的内容不会写入；输入错误可在当前字段重试。修改时回车保留原值，规则的排除词和订阅源范围可输入 `-` 清空（清空源范围表示全部源）。机器人替换凭据时，签名密钥留空表示关闭加签。
-删除和发送测试消息需选择 `1` 确认，默认取消。推送历史显示最近 30 条，输入序号查看完整消息，失败任务可确认后重新入队，输入 `r` 刷新列表。规则测试只输入标题，不会发送消息。退出菜单不会停止后台监控。
-
-机器人可通过 `--credential-file /absolute/path/input.json` 非交互配置，JSON 为 `{"webhook":"https://open.feishu.cn/open-apis/bot/v2/hook/…","secret":"…"}`。输入文件应为 `0600` 并由管理员妥善保管；不要将 webhook 或密钥写进 shell 命令参数、版本库或日志。
-
-## 已定义的监控行为
-
-- 第一次成功解析只建立当前源内容的基线，不推送历史；有效空源也可以完成初始化。畸形 XML 不建立基线，下次重试。
-- 后续按首次发现判断新增，不按发布时间过滤；源重新启用后会处理停用期间仍留在源内的新文章。轮询无法发现两次抓取之间已从源中移除的文章。
-- GUID/Atom ID 优先，其次链接，最后标题与时间组合哈希；去重范围是单个源。同身份文章修改不重推。
-- 同文章、同机器人命中多条规则时合并通知。规则变更只影响之后发现的文章；已生成的任务保留原内容并继续发送。
-- URL 是源的身份。更换 URL 请删除并新增，新源重新建立基线；删除源保留原指纹、历史和已经入队的任务。
-- 并发最多 5 个源。连接超时 10 秒，每次抓取总时限 30 秒，解压后响应上限 5 MiB；失败指数退避至 1 小时。
-- 使用 ETag / Last-Modified 条件请求；文章、命中快照、发送任务与验证信息在同一事务保存。
-- 推送为持久化队列。每机器人发送间隔至少 1 秒；重试最多 5 次（含首次），延迟 30 秒、2 分钟、10 分钟、30 分钟，遵守更长的 `Retry-After`。签名、凭据等永久错误等待人工修复。
-- 超时或崩溃可能发生在远端接收之后，因此采用至少一次投递。稳定事件编号帮助识别偶发重复；不会声称恰好一次送达。
-- 手动重试重置该事件的重试次数，保持事件编号。测试消息也经过同一限流、持久化及重试队列。
-- 已发送任务及完整文章内容保留 90 天；精简文章指纹、未完成/失败任务保留。后台启动时及每日清理。
-- 所有持久化时间为 Unix UTC 时间戳；来源发布时间保留原文。服务心跳超过 10 秒视为不在线。状态概览的心跳时间使用当前机器的本地时区；在线仅表示后台心跳有效。队列计数基于当前保留的推送记录，最近错误可能包含正在重试的任务和已停用订阅源的历史错误。原先解析 `status` JSON 的脚本需改用 `status --json`。
-
-凭据为随机引用的独立 JSON 文件，强制 `0600`，文件目录 `0700`；数据库仅存文件引用。替换凭据会生成新文件，数据库成功切换到新引用后，仅在旧凭据不再被任何活动机器人引用时清理旧文件；删除机器人后也仅清理已无活动引用的凭据文件。发送路径在领取任务的数据库事务释放前，将本次发送所需凭据读入内存，以避免与凭据清理竞争。备份仅包含活动机器人当前引用的凭据文件。备份本身也包含密钥，应限制访问。
-
-## 升级与恢复
-
-### 方式一：一键自动升级（推荐）
-
-升级使用同一组命令，从私有仓库拉取最新源码并执行安装脚本；运行前同样需要为 `git` 配置仓库访问权限：
-
-```sh
-(
-  src_dir="$(mktemp -d)" || exit
-  trap 'exit_status=$?; rm -rf -- "$src_dir" || :; exit "$exit_status"' EXIT
-  git clone --depth 1 https://github.com/imymi/rss-watch.git "$src_dir" &&
-  sudo bash "$src_dir/deploy/install.sh"
-)
-```
-
-脚本将自动执行以下升级保障：
-- 在 `/var/lib/rss-watch/backups/upgrade-YYYYMMDD_HHMMSS` 自动生成全量备份（含 SQLite 在线备份与物理凭据完整性校验）；
-- 在独立版本目录 `/opt/rss-watch/releases/<release_id>` 中构建新版本并安装依赖；
-- 优雅停止当前运行中的 `rss-watch` 旧服务；
-- 原子切换 `/opt/rss-watch/current` 软链接；
-- 重启 systemd 服务并执行启动校验；若启动失败，自动原子回滚软链接至上一版本并拉起旧服务，杜绝半更新或服务长期中断。
-
-### 方式二：手动升级流程
-
-```sh
-# 1. 运行中执行在线备份
-sudo -u rss-watch /opt/rss-watch/current/.venv/bin/rss-watch backup "/var/lib/rss-watch/backups/manual-$(date +%Y%m%d_%H%M%S)"
-
-# 2. 停止服务
-sudo systemctl stop rss-watch
-
-# 3. 更新源码与锁文件（保留配置与数据）
-cd /opt/rss-watch/releases/new_release
-# 示例：更新代码（git pull 或解压覆盖最新源码，排除 .venv 与数据目录）
-uv sync --locked --no-dev --python /usr/bin/python3.12
-ln -sfn /opt/rss-watch/releases/new_release /opt/rss-watch/current
-
-# 4. 重启服务并检查状态
-sudo systemctl restart rss-watch
-sudo /opt/rss-watch/current/deploy/check.sh
-```
-
-第一版数据库 schema 为 1，不支持未知版本；后续 schema 变更必须提供显式迁移。回滚时恢复旧代码及对应数据库备份。
-
-### 灾难恢复步骤（从备份恢复）
-
-若发生误操作、磁盘损坏或需要回滚旧版本，可使用以下步骤从备份目录完整恢复：
-
-以下为默认路径示例；自定义安装须先按实际配置替换路径并核对归属，不得使用空路径、根目录、系统公共目录、父目录穿越或经过符号链接的路径。先退出所有管理 CLI，再整段执行；停止服务或备份校验失败时不得继续恢复。
-
-```sh
-(
-set -e
-# 假设备份位于 /var/lib/rss-watch/backups/upgrade-20260914_180000
-
-# 1. 停止 systemd 服务和所有管理 CLI
-sudo systemctl stop rss-watch
-[ "$(sudo systemctl show rss-watch -p ActiveState --value)" = inactive ]
-
-# 2. 备份当前故障现场（防止二次损坏）
-sudo tar -czf "/tmp/rss-watch-crash-$(date +%s).tar.gz" /var/lib/rss-watch /etc/rss-watch 2>/dev/null || true
-
-# 3. 校验备份与目标凭据路径（失败则中止，不修改现有数据库和凭据）
-sudo /opt/rss-watch/current/.venv/bin/python /opt/rss-watch/current/deploy/backup_helper.py verify /var/lib/rss-watch/backups/upgrade-20260914_180000
-sudo test "$(sudo realpath -e /etc/rss-watch/credentials)" = /etc/rss-watch/credentials
-
-# 4. 恢复数据库文件（注意清理旧的 -wal 和 -shm 临时文件，避免混入）
-sudo rm -f /var/lib/rss-watch/rss-watch.sqlite3-wal /var/lib/rss-watch/rss-watch.sqlite3-shm
-sudo cp -f /var/lib/rss-watch/backups/upgrade-20260914_180000/rss-watch.sqlite3 /var/lib/rss-watch/
-sudo chown rss-watch:rss-watch /var/lib/rss-watch/rss-watch.sqlite3
-sudo chmod 0600 /var/lib/rss-watch/rss-watch.sqlite3
-
-# 5. 恢复物理凭据文件（仅清理目录第一层的 .json 文件/链接，不递归）
-sudo find /etc/rss-watch/credentials -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -name "*.json" -delete
-# 空凭据备份无需复制；复制失败仍中止恢复
-sudo find /var/lib/rss-watch/backups/upgrade-20260914_180000/credentials -mindepth 1 -maxdepth 1 -type f -name "*.json" -exec cp -f -t /etc/rss-watch/credentials/ -- {} +
-sudo chown -R rss-watch:rss-watch /etc/rss-watch/credentials
-sudo chmod 0700 /etc/rss-watch/credentials
-sudo find /etc/rss-watch/credentials -type f -name "*.json" -exec chmod 0600 {} +
-
-# 6. 启动服务并运行自检验证
-sudo systemctl start rss-watch
-sudo /opt/rss-watch/current/deploy/check.sh
-)
-```
-
-恢复旧备份可能重发备份后已送达的通知，这是至少一次投递的预期行为。
-
-### 卸载与清理
-
-使用 `deploy/uninstall.sh`，需要系统 Python 3.12+；实际卸载需在 Linux 上以 root 执行。脚本及同目录的 `uninstall_helper.py`、`entry_helper.py` 必须一起保留。支持旧版单目录和 `releases/current` 布局，也支持从安装目录内部执行。
-
-```sh
-# 查看参数；预览不改变文件、账户或服务状态
-sudo /opt/rss-watch/current/deploy/uninstall.sh --help
-sudo /opt/rss-watch/current/deploy/uninstall.sh --dry-run
-
-# 默认卸载：停止并禁用服务、删除单元并 daemon-reload，清理代码、虚拟环境和历史版本
-sudo /opt/rss-watch/current/deploy/uninstall.sh
-```
-
-默认保留配置、飞书凭据、数据库、数据目录内的备份，以及服务账户和用户组，并逐项输出实际保留路径。默认路径为 `/etc/rss-watch/config.toml`、`/etc/rss-watch/credentials`、`/var/lib/rss-watch`。如果数据位于安装目录的子目录中，只删除代码，保留这些子目录及必要的父目录。安装目录与数据目录相同或位于数据目录内时，拒绝卸载，避免无法区分两者。
-
-```sh
-# 彻底卸载：先列出实际路径，再要求输入 rss-watch 确认
-sudo /opt/rss-watch/current/deploy/uninstall.sh --purge
-
-# 非交互执行必须同时提供这两个参数
-sudo /opt/rss-watch/current/deploy/uninstall.sh --purge --yes
-
-# 自定义安装和配置路径；数据与凭据路径始终从这个实际配置读取
-sudo ./deploy/uninstall.sh --target /srv/rss-watch --config /etc/rss-watch/config.toml --purge --dry-run
-```
-
-`--purge` 删除配置、凭据、数据库及数据目录内的备份，删除后无法由本机保留数据恢复。独立保存在其他位置的备份不在清理范围内。默认卸载会删除已安装的卸载脚本；之后如需彻底清理或再次卸载，请从解压的源码包运行 `sudo ./deploy/uninstall.sh`，并传入原来的 `--target` 和 `--config`。旧版路径为 `/opt/rss-watch/deploy/uninstall.sh`。
-
-路径保护和失败行为：
-
-- 拒绝空路径、根目录、系统公共目录、父目录穿越及经过符号链接的配置、数据或安装路径。代码目录内的符号链接仅删除链接本身，不递归进入外部目标。
-- 配置损坏或现有安装缺少配置时，在修改前中止，不回退到默认数据路径。`RSS_WATCH_DATA_DIR`、`RSS_WATCH_CREDS_DIR` 不覆盖配置。
-- 通过项目文件、数据库表结构、凭据格式和备份结构检查归属；不以目录名字包含 `rss-watch` 作为依据。目录含未知文件或数据库结构无法核实时，程序仍可卸载，但保留全部业务目录和配置并返回 `1`。SQLite 检查采用 immutable 只读方式；若表结构尚仅存在于 WAL 中，需先正常停止服务并检查点，再重试清理。
-- systemd 查询、停止或停后状态核验失败，立即中止且不删除项目文件。禁用和 daemon-reload 失败也会报告错误。文件和服务已不存在时可重复运行。
-- 新安装器在配置目录写入 root 所有、权限 `0600` 的 `install-receipt.json`，记录实际创建的账户、UID/GID、home、shell 和单元摘要。彻底卸载只删除记录可验证且身份仍匹配的专用账户和无其他成员的组。旧安装无记录、原有账户或身份变化时保留并说明；默认卸载始终保留账户和记录。共享配置父目录不会递归删除，只尝试移除清理后为空的配置父目录。
-
-退出码：`0` 表示完成（或预览通过），`1` 表示取消、保护性拒绝、清理不完整或系统操作失败，`2` 表示参数错误。预览即使带 `--purge` 也不要求确认、不调用 systemctl。
-
-## 测试与开发交接
-
-```sh
-uv sync --locked
-uv run pytest
 uv run ruff check .
+uv run pytest -q
 uv build
+# 有 Docker 的环境：隔离 Compose 项目与数据卷进行集成测试
+RSS_WATCH_DOCKER_TEST=1 uv run pytest -q tests/test_docker.py
 ```
 
-自动化测试使用 HTTPX MockTransport，不访问真实飞书群。2026-09-16 已在 Debian 13 / systemd 257 完成真实安装、升级、默认卸载、重装、彻底卸载、停止失败保护和旧版单目录验收；Linux 自动化测试 109 项通过。另经用户授权完成真实飞书签名消息、RSS 基线静默、新文章推送、多规则合并及去重联调。详细证据及尚未验证的范围见 [VALIDATION.md](VALIDATION.md)。
+CI 包含 Python 测试与 Linux Docker 集成测试。验证范围和记录见 [VALIDATION.md](VALIDATION.md)。
 
-模块划分：`config` 配置及凭据；`db` schema/事务/清理；`domain` 解析与匹配；`service` 管理业务；`worker` 抓取和发送；`cli` 中文菜单及命令。菜单和子命令调用同一 Service。进一步交接见 [ANTIGRAVITY.md](ANTIGRAVITY.md)。
+## 管理 API
 
-实现依据：[飞书自定义机器人](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)、[feedparser 条件请求](https://feedparser.readthedocs.io/en/stable/http-etag.html)、[HTTPX 超时](https://www.python-httpx.org/advanced/timeouts/)。
+API 使用管理员登录 Cookie。`GET /api/session/csrf` 获取 CSRF 校验值，写请求携带 `X-CSRF-Token`。机器人列表只返回 ID 和名称；规则的 includes、excludes、source_ids 返回数组。
+
+| 请求 | 用途 |
+| --- | --- |
+| GET /api/status、/api/health | 运行状态与数据库/凭据检查 |
+| GET /api/sources、/api/rules、/api/bots | 配置列表 |
+| GET /api/history?state=failed&limit=30 | 推送历史，limit 为 1–1000 |
+| GET /api/settings | 全局设置 |
+| POST /api/sources、/api/rules、/api/bots | 创建记录 |
+| PUT /api/sources/{id}、/api/rules/{id}、/api/bots/{id} | 完整更新记录 |
+| POST /api/settings | 修改指定设置，接收键值对象 |
+| POST /api/{sources\|rules}/{id}/{enable\|disable\|delete} | 启停或删除 |
+| POST /api/bots/{id}/{test\|delete} | 测试消息或删除机器人 |
+| POST /api/rules/{id}/test | 检查标题，接收 `{"title":"AI 新消息"}` |
+| POST /api/deliveries/{event}/retry | 重试失败事件 |
+
+规则写入示例：
+
+```json
+{
+  "name": "AI 动态",
+  "includes": ["AI", "人工智能"],
+  "excludes": ["广告"],
+  "mode": "any",
+  "source_ids": [1],
+  "bot_id": 1
+}
+```
+
+来源空数组表示全部源。规则测试只返回匹配结果，不发送通知。
+
+## 常见问题
+
+**监控离线怎么办？** 先检查 `docker compose ps` 和 worker 日志，再运行 `check-worker`。心跳超过 10 秒视为离线；在线只表示监控循环有有效心跳。
+
+**第一次抓取为什么没有消息？** 首次抓取建立基线，这是预期行为。之后新出现的标题需命中已启用规则，且推送未暂停。
+
+**为什么“测试消息”一直待发送？** 测试消息由 worker 发送；检查 worker 是否在线、推送是否暂停、是否仍处于维护模式。
+
+**为什么恢复后监控没有继续？** 恢复保留维护模式并暂停抓取/推送，需先检查数据、退出维护模式，再分别恢复两项功能。
+
+**容器里的 localhost 指向哪里？** 指向该容器自身。访问宿主机上的 RSS 服务时，应填写容器能访问的宿主机地址，或为两个服务配置可互通的 Docker 网络。
+
+**如何查看当前机器人密钥？** 后台支持替换，不回显已有密钥。完整备份含凭据，凭据文件以 `0600` 保存、目录以 `0700` 保存；数据库只存文件引用。

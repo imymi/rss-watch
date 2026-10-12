@@ -187,10 +187,15 @@ def data_directory(path: Path) -> bool:
         "rss-watch.sqlite3-shm",
         "admin.lock",
         "daemon.lock",
+        "data.lock",
         "backups",
     }
-    if any(p.name not in allowed or p.is_symlink() for p in items):
-        return False
+    for item in items:
+        if item.is_symlink():
+            return False
+        if item.name not in allowed:
+            if not re.fullmatch(r"migration-v1-[0-9]+\.sqlite3", item.name) or not sqlite_header(item):
+                return False
     if not sqlite_header(path / "rss-watch.sqlite3"):
         return False
     backups = path / "backups"
@@ -209,7 +214,7 @@ def data_directory(path: Path) -> bool:
             try:
                 manifest = json.loads(read_bytes(backup / "manifest.json"))
                 if (
-                    manifest.get("schema_version") != 1
+                    manifest.get("schema_version") not in (1, 2)
                     or not sqlite_header(backup / "rss-watch.sqlite3")
                     or not credential_directory(backup / "credentials")
                 ):

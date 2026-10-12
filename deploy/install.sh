@@ -356,7 +356,17 @@ fi
 # 启动失败时自动回滚符号链接并恢复旧服务，且严格验证旧服务恢复结果
 if [[ $START_FAILED -ne 0 ]]; then
     echo "❌ 错误：新版本服务启动失败！正在自动回滚至旧版本..." >&2
-    "$SYSTEMCTL" stop "$SERVICE_NAME" 2>/dev/null || true
+    if ! "$SYSTEMCTL" stop "$SERVICE_NAME"; then
+        echo "❌ 无法停止新服务，未回退代码或数据库；请先停止服务并使用升级前完整备份恢复。" >&2
+        exit 1
+    fi
+    if [[ -n "${BACKUP_DEST:-}" ]] && [[ -d "$BACKUP_DEST" ]]; then
+        if ! "$PYTHON_BIN" "$RELEASE_DIR/deploy/backup_helper.py" restore-if-migrated \
+            "$DATA_DIR" "$CREDS_DIR" "$BACKUP_DEST"; then
+            echo "❌ 数据库版本回滚失败，未启动旧程序；完整备份位于 $BACKUP_DEST。" >&2
+            exit 1
+        fi
+    fi
 
     if [[ $IS_LEGACY_UPGRADE -eq 1 ]] && [[ -n "$LEGACY_REL" ]] && [[ -d "$LEGACY_REL" ]]; then
         echo "==> 检测到旧版单目录迁移失败，正在回滚恢复旧版单目录环境与服务配置..."

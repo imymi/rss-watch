@@ -86,7 +86,7 @@ def source_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json"
 
 
 @source_app.command("add")
-def source_add(ctx: typer.Context, name: str, url: str, interval: int = 300):
+def source_add(ctx: typer.Context, name: str, url: str, interval: int | None = None):
     console.print(f"订阅源 ID：{service(ctx).source_save(name, url, interval)}")
 
 
@@ -276,6 +276,17 @@ def backup(ctx: typer.Context, destination: Path):
     """在线备份数据库及引用的凭据；目标目录必须不存在。"""
     service(ctx).backup(destination)
     console.print(f"备份完成：{destination}")
+
+
+@app.command("restore")
+def restore(ctx: typer.Context, directory: Path, yes: bool = typer.Option(False, "--yes")):
+    """恢复完整备份目录；暂停监控、保存当前数据，并保持维护模式等待检查。"""
+    from .archives import restore_backup
+    if not yes and not typer.confirm("确认用备份覆盖业务数据？", default=False):
+        console.print("已取消")
+        return
+    rollback = restore_backup(service(ctx), directory)
+    console.print(f"恢复完成；恢复前备份：{rollback}。请检查数据后在后台退出维护模式。")
 
 
 @app.command()
