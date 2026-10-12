@@ -1,0 +1,8 @@
+# 源码构建：docker compose -f compose.yaml -f compose.build.yaml up --build -d
+services:
+  web:
+    image: rss-watch:${RSS_WATCH_VERSION:-local}
+    build: .
+  worker:
+    image: rss-watch:${RSS_WATCH_VERSION:-local}
+    build: .

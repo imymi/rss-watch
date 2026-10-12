@@ -1,0 +1,158 @@
+name: publish-image
+run-name: Publish GHCR ${{ inputs.tag || github.event.release.tag_name }}
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (for example v0.2.0)
+        required: true
+        default: v0.2.0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghcr-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image: ${{ steps.version.outputs.image }}
+      latest: ${{ steps.version.outputs.latest }}
+      revision: ${{ steps.version.outputs.revision }}
+    steps:
+      - name: Validate tag format
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "A stable vX.Y.Z release tag is required" >&2; exit 1; }
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - name: Validate release source
+        id: version
+        run: |
+          uv run --no-project python - <<'PY'
+          import json, os, subprocess, tomllib, urllib.request
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          if tag != 'v' + version or not Path('Dockerfile').is_file():
+              raise SystemExit('Tag must match the package version and contain a Dockerfile')
+          repo = os.environ['GITHUB_REPOSITORY']
+          url = os.environ['GITHUB_API_URL'] + '/repos/' + repo + '/releases/latest'
+          request = urllib.request.Request(url, headers={'User-Agent': 'rss-watch-image-release'})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              latest = json.load(response)['tag_name'] == tag
+          revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nimage=ghcr.io/{repo.lower()}\nlatest={str(latest).lower()}\nrevision={revision}\n')
+          PY
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - name: Test Docker source before publishing
+        run: uv run pytest -q tests/test_docker.py
+        env:
+          RSS_WATCH_DOCKER_TEST: '1'
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ needs.validate.outputs.image }}
+      version: ${{ needs.validate.outputs.version }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Protect existing version tags
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "Version already published. Re-run only failed verification jobs, or publish a new release." >&2
+            exit 1
+          fi
+      - name: Build and push both architectures
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ needs.validate.outputs.image }}:${{ needs.validate.outputs.version }}
+            ${{ needs.validate.outputs.image }}:v${{ needs.validate.outputs.version }}
+            ${{ needs.validate.outputs.latest == 'true' && format('{0}:latest', needs.validate.outputs.image) || '' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.revision }}
+            org.opencontainers.image.description=RSS Watch with a Chinese admin dashboard
+          cache-from: type=gha,scope=rss-watch-image
+          cache-to: type=gha,mode=max,scope=rss-watch-image
+      - name: Record published image
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          printf 'Published `%s:%s`\n\nDigest: `%s`\n\nPlatforms: linux/amd64, linux/arm64\n' "$IMAGE" "$VERSION" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: publish
+    name: Verify anonymous pull (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Test published image without registry credentials
+        run: uv run pytest -q tests/test_docker.py
+        env:
+          RSS_WATCH_DOCKER_TEST: '1'
+          RSS_WATCH_DOCKER_IMAGE: ${{ needs.publish.outputs.image }}:${{ needs.publish.outputs.version }}

@@ -1,8 +1,10 @@
 """Opt-in integration test; always uses an isolated Compose project and fresh volumes."""
+import json
 import os
 import re
 import socket
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -21,17 +23,37 @@ def test_compose_health_read_only_credentials_and_persistence():
         port = listener.getsockname()[1]
     env = dict(os.environ, RSS_WATCH_PORT=str(port), RSS_WATCH_BIND="127.0.0.1",
                RSS_WATCH_VERSION=project)
+    image = os.environ.get("RSS_WATCH_DOCKER_IMAGE")
+    # Published-image checks use the production Compose file and never build locally.
+    temporary = tempfile.TemporaryDirectory(prefix=project)
+    files = ["-f", str(ROOT / "compose.yaml")]
+    if image:
+        override = Path(temporary.name) / "image.json"
+        override.write_text(json.dumps({"services": {
+            name: {"image": image} for name in ("web", "worker")
+        }}))
+        files.extend(["-f", str(override)])
+    else:
+        files.extend(["-f", str(ROOT / "compose.build.yaml")])
 
     def compose(*args, check=True):
-        return subprocess.run(["docker", "compose", "-p", project, *args],
-                              cwd=ROOT, env=env, check=check, capture_output=True,
-                              text=True, timeout=600)
+        result = subprocess.run(["docker", "compose", "-p", project, *files, *args],
+                                cwd=ROOT, env=env, check=False, capture_output=True,
+                                text=True, timeout=600)
+        if check and result.returncode:
+            pytest.fail(f"Docker Compose {args} failed:\n{result.stdout}\n{result.stderr}",
+                        pytrace=False)
+        return result
 
     def csrf(client, path):
         return re.search(r'name="csrf" value="([a-f0-9]+)"', client.get(path).text)[1]
 
     try:
-        compose("up", "--build", "-d", "--wait", "--wait-timeout", "120")
+        if image:
+            compose("pull")
+            compose("up", "--no-build", "-d", "--wait", "--wait-timeout", "120")
+        else:
+            compose("up", "--build", "-d", "--wait", "--wait-timeout", "120")
         with httpx.Client(base_url=f"http://127.0.0.1:{port}", follow_redirects=True) as client:
             bootstrap = compose("exec", "-T", "web", "cat", "/data/bootstrap-token").stdout.strip()
             response = client.post("/setup", data={"csrf": csrf(client, "/setup"),
@@ -60,4 +82,7 @@ def test_compose_health_read_only_credentials_and_persistence():
             assert settings["default_interval"] == 120 and settings["fetch_paused"]
             compose("exec", "-T", "worker", "rss-watch-container", "check-worker")
     finally:
-        compose("down", "--volumes", "--remove-orphans", check=False)
+        try:
+            compose("down", "--volumes", "--remove-orphans", check=False)
+        finally:
+            temporary.cleanup()

@@ -4,7 +4,7 @@ RSS / Atom 关键词监控工具。定时检查订阅标题，命中规则后发
 
 **v0.2.0 推荐使用 Docker Compose 部署。** Python 3.12+，SQLite；管理页面和静态资源随镜像提供。
 
-[发布版本](https://github.com/imymi/rss-watch/releases) · [测试状态](https://github.com/imymi/rss-watch/actions/workflows/tests.yml) · [更新记录](CHANGELOG.md)
+[发布版本](https://github.com/imymi/rss-watch/releases) · [公开镜像](https://github.com/imymi/rss-watch/pkgs/container/rss-watch) · [测试状态](https://github.com/imymi/rss-watch/actions/workflows/tests.yml) · [更新记录](CHANGELOG.md)
 
 ## 版本选择
 
@@ -24,15 +24,20 @@ v0.2 能导入 v0.1 的完整备份。v0.1 不能直接读取 schema 2 数据库
 
 ## 快速部署
 
-准备 Docker Engine、Docker Compose 插件，以及可访问订阅地址和飞书接口的网络。首次构建会下载 Python 基础镜像、uv 和锁定依赖。
+准备 Docker Engine、Docker Compose 插件、curl，以及可访问 GHCR、订阅地址和飞书接口的网络。公开镜像支持 `linux/amd64` 和 `linux/arm64`，无需登录镜像仓库，也无需在部署机器安装 Python 或 uv。
 
 ```sh
-git clone --branch v0.2.0 --depth 1 https://github.com/imymi/rss-watch.git
+mkdir rss-watch
 cd rss-watch
+curl -fL -o compose.yaml https://raw.githubusercontent.com/imymi/rss-watch/main/compose.yaml
+curl -fL -o .env.example https://raw.githubusercontent.com/imymi/rss-watch/main/.env.example
 cp .env.example .env
-docker compose up --build -d
+docker compose pull
+docker compose up -d --no-build
 docker compose exec web cat /data/bootstrap-token
 ```
+
+以上下载当前 `main` 中的部署模板，`.env` 默认固定镜像版本 `0.2.0`。`v0.2.0` 源码标签保留发布时的本地构建配置，不需修改标签就能使用预构建镜像。
 
 打开 **[http://127.0.0.1:8080](http://127.0.0.1:8080)**，用最后一条命令显示的一次性口令创建管理员，再登录。密码至少 12 个字符；口令使用后删除，不写入运行日志。
 
@@ -117,12 +122,35 @@ RSS_WATCH_PORT=8080
 | --- | --- | --- |
 | RSS_WATCH_BIND | 127.0.0.1 | 宿主机监听地址 |
 | RSS_WATCH_PORT | 8080 | 宿主机端口 |
-| RSS_WATCH_VERSION | local | **本地构建镜像的标签**，不会自动下载发布镜像 |
+| RSS_WATCH_IMAGE | ghcr.io/imymi/rss-watch | 镜像仓库与名称，不含标签 |
+| RSS_WATCH_VERSION | 0.2.0 | 已发布镜像的版本标签；生产部署建议固定版本 |
 | TZ | Asia/Shanghai | 容器时区；页面时区另在后台设置 |
 | RSS_WATCH_SECURE_COOKIES | 0 | HTTPS 访问时设为 1 |
 | RSS_WATCH_TRUSTED_PROXIES | 127.0.0.1 | 实际反向代理地址，多个地址逗号分隔 |
 
 使用 HTTPS 反向代理时，设置 Secure Cookie 和实际可信代理地址；代理转发到 web 的 8080 端口。设置 Secure Cookie 后应使用 HTTPS 访问。
+
+### 镜像与源码构建
+
+```sh
+docker pull ghcr.io/imymi/rss-watch:0.2.0
+# 同一版本的别名
+docker pull ghcr.io/imymi/rss-watch:v0.2.0
+```
+
+`latest` 指向当前最新正式 Release 对应的镜像。`0.2.0` / `v0.2.0` 固定版本；需要严格锁定内容时可使用 Package 页面显示的 SHA256 digest。
+
+默认 `compose.yaml` 只拉取镜像。需要修改源码时，在当前 `main` 源码目录使用独立构建配置：
+
+```sh
+RSS_WATCH_VERSION=local docker compose -f compose.yaml -f compose.build.yaml up --build -d
+```
+
+已有本地构建部署改为拉取镜像时，替换部署模板，将 `.env` 中的 `RSS_WATCH_VERSION=local` 改为 `0.2.0`，再执行 `docker compose pull` 和 `docker compose up -d --no-build`。沿用原 Compose 项目名和卷，先下载完整备份。
+
+GitHub Actions 的 `publish-image` 流程从已存在的稳定版本标签构建；先验证版本号、Python 测试及 Docker 集成测试，再发布两种架构。镜像标注源码提交；已存在的版本标签禁止覆盖，只有当前最新正式 Release 更新 `latest`。首次发布可在 Actions 中手动选择 `v0.2.0`；以后发布正式 Release 自动触发。发布后分别在原生 amd64 / arm64 runner 上测试匿名拉取、启动、设置与数据保留及只读凭据卷。
+
+GHCR Package 的 Public 设置独立于代码仓库；首次发布后需在 Package Settings 中设为 Public。若首次验证因权限失败，公开后重跑失败的验证任务即可，无需重建或覆盖版本镜像。
 
 ```sh
 docker compose ps
@@ -191,7 +219,7 @@ CLI 与网页使用同一恢复流程。`--yes` 表示已确认覆盖当前业�
 
 ### 升级与回退
 
-升级前下载完整备份并保留当前源码/镜像版本。获取目标版本源码，沿用 `.env` 和原数据卷，再执行 `docker compose up --build -d`。
+升级前下载完整备份并记录当前镜像版本。将 `.env` 的 `RSS_WATCH_VERSION` 改为目标已发布版本，沿用项目名和原数据卷，再执行 `docker compose pull` 与 `docker compose up -d --no-build`。若目标版本调整部署模板，应先按其发布说明更新模板。源码构建部署使用 `compose.build.yaml`。
 
 schema 1 会自动加表迁移到 schema 2，迁移前另存 `migration-v1-*.sqlite3` 数据库快照。**数据库快照不含凭据，不能替代完整备份。**
 
@@ -265,6 +293,9 @@ uv run pytest -q
 uv build
 # 有 Docker 的环境：隔离 Compose 项目与数据卷进行集成测试
 RSS_WATCH_DOCKER_TEST=1 uv run pytest -q tests/test_docker.py
+# 测试已发布镜像（只拉取、不构建）
+RSS_WATCH_DOCKER_TEST=1 RSS_WATCH_DOCKER_IMAGE=ghcr.io/imymi/rss-watch:0.2.0 \
+  uv run pytest -q tests/test_docker.py
 ```
 
 CI 包含 Python 测试与 Linux Docker 集成测试。验证范围和记录见 [VALIDATION.md](VALIDATION.md)。

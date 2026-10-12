@@ -1,7 +1,6 @@
 name: rss-watch
 x-common: &common
-  image: rss-watch:${RSS_WATCH_VERSION:-local}
-  build: .
+  image: ${RSS_WATCH_IMAGE:-ghcr.io/imymi/rss-watch}:${RSS_WATCH_VERSION:-0.2.0}
   restart: unless-stopped
   init: true
   read_only: true
