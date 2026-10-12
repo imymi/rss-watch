@@ -15,6 +15,16 @@
 - v0.2.0 未实测真实飞书群；原版的真实飞书签名与 RSS 联调记录见下文。
 - 有 1 条 Starlette TestClient 关于 HTTPX 的弃用提示，不影响本轮测试结果。
 
+## 2026-10-13：GHCR 镜像发布
+
+- [发布流程 38289627270](https://github.com/imymi/rss-watch/actions/runs/38289627270) 的 validate、publish、原生 amd64 验证及原生 arm64 验证全部成功。发布前执行版本校验、Python 测试及源码 Docker 集成测试。
+- 镜像从已有 `v0.2.0` 标签的原始提交 `8e26e0f899b7fbcf5b3a3c6719d087a1070eb9bb` 构建，原版分支及两个发布标签未修改。
+- [GHCR Package](https://github.com/imymi/rss-watch/pkgs/container/rss-watch) 页面显示 Public；`ghcr.io/imymi/rss-watch` 的 `0.2.0`、`v0.2.0`、`latest` 指向同一清单：`sha256:a3d405242bdaa12a25bbf89a3b7e74c951bfe52f3fa054f59648b0d92f6e0156`。
+- 从本机不使用 GitHub / Docker 登录凭据申请匿名只读 registry token，读取清单与配置：确认 linux/amd64、linux/arm64 两个平台，版本标注 0.2.0，源码 revision 标注与上述提交一致。
+- 两个原生验证 job 均不登录 GHCR，使用实际发布镜像运行生产 Compose 模板，验证匿名 pull、web/worker 健康检查、管理员初始化/登录、设置及订阅持久化、容器重建和 worker 凭据卷只读。
+- `main` 的默认 Compose 改为拉取公开镜像，新增 `compose.build.yaml` 保留源码构建；[配置变更 CI 38289582899](https://github.com/imymi/rss-watch/actions/runs/38289582899) 的 Python/Ruff/打包和源码 Docker 测试全部成功。
+- 本轮没有发送真实飞书群消息。
+
 ## 历史验证记录
 
 验证日期：2026-09-14；卸载补充验证：2026-09-15。环境：macOS / Python 3.12.13。

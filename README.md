@@ -150,7 +150,7 @@ RSS_WATCH_VERSION=local docker compose -f compose.yaml -f compose.build.yaml up 
 
 GitHub Actions 的 `publish-image` 流程从已存在的稳定版本标签构建；先验证版本号、Python 测试及 Docker 集成测试，再发布两种架构。镜像标注源码提交；已存在的版本标签禁止覆盖，只有当前最新正式 Release 更新 `latest`。首次发布可在 Actions 中手动选择 `v0.2.0`；以后发布正式 Release 自动触发。发布后分别在原生 amd64 / arm64 runner 上测试匿名拉取、启动、设置与数据保留及只读凭据卷。
 
-GHCR Package 的 Public 设置独立于代码仓库；首次发布后需在 Package Settings 中设为 Public。若首次验证因权限失败，公开后重跑失败的验证任务即可，无需重建或覆盖版本镜像。
+GHCR Package 的 Public 设置独立于代码仓库；首次发布后应确认 Package 为 Public；若仍为 Private，在 Package Settings 中改为 Public。若首次验证因权限失败，公开后重跑失败的验证任务即可，无需重建或覆盖版本镜像。
 
 ```sh
 docker compose ps
