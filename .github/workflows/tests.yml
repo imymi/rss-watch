@@ -14,6 +14,10 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
       - run: uv build
+      - name: Verify distribution licenses
+        run: uv run pytest -q tests/test_distribution.py
+        env:
+          RSS_WATCH_DIST_DIR: dist
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -23,6 +27,6 @@ jobs:
           python-version: '3.12'
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run pytest -q tests/test_docker.py
+      - run: uv run pytest -q -s tests/test_docker.py
         env:
           RSS_WATCH_DOCKER_TEST: '1'
