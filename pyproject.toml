@@ -7,6 +7,8 @@ name = "rss-watch"
 version = "0.2.0"
 description = "RSS keyword monitor with a Chinese admin dashboard and Feishu notifications"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.12"
 dependencies = [
   "typer>=0.16,<1",
