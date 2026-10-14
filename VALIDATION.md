@@ -1,5 +1,30 @@
 # 交付验证记录
 
+## 2026-10-15：MIT 许可分发产物验收
+
+基线：最新 `main` 的 `8bb0560b08cef02c39c41320d33f17e855cc0354`。从该提交的干净源码构建 Wheel 与 sdist；在基于该提交的测试分支实际构建 Linux/amd64 Docker 最终镜像，Dockerfile、锁文件与打包配置均未改变。
+
+- Wheel：`rss_watch-0.2.0.dist-info/licenses/` 包含与源码逐字节一致的 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`，两文件均列入 Wheel `RECORD`。
+- sdist：`rss_watch-0.2.0/` 根目录包含与源码逐字节一致的两文件。
+- Wheel `METADATA` 和 sdist `PKG-INFO` 均为 `Metadata-Version: 2.5`、`License-Expression: MIT`，且各有 `License-File: LICENSE` 和 `License-File: THIRD_PARTY_NOTICES.md`。自动检查接受支持这些字段的元数据版本 2.4 及以上。
+- 最终容器以运行用户读取安装后的分发元数据，确认同样的 MIT 和两项文件声明。两文件位于 `/opt/venv/lib/python3.12/site-packages/rss_watch-0.2.0.dist-info/licenses/`，SHA-256 与源码一致；仅复制 `/opt/venv` 的最终阶段保留了这些材料。
+- [Linux CI 38615282991](https://github.com/imymi/rss-watch/actions/runs/38615282991)（测试提交 `1dee86fbfd889cb9d6e85c097a22ce5cf11374e4`）：Ruff 通过；249 项单元测试通过、3 项按环境跳过；构建后许可专项 2 项通过；实际 Docker 集成测试 1 项通过，包含原有健康、权限及持久化检查。
+- 本地以非 editable 安装复现构建阶段，也检查了全部 30 个分发包（项目及 29 个运行依赖）。分别人为删除 Wheel 的 LICENSE、删除 sdist 的第三方说明、修改 MIT 元数据或删除 License-File 声明，四种损坏均被专项测试拒绝。
+
+Docker 内第三方 Python 材料实际位置如下，路径均相对于 `/opt/venv/lib/python3.12/site-packages/`；完整的 29 项名称、版本和绝对路径保留在上述 CI 的 Docker job 日志 `Final image license inventory` 中。
+
+| 材料 | 实际位置 |
+| --- | --- |
+| 27 个依赖的随包许可 | 各自的 `<名称>-<版本>.dist-info/licenses/`，原文件名可能为 `LICENSE`、`LICENSE.txt` 或 `LICENSE.md` |
+| mdurl、shellingham 的旧式许可位置 | `mdurl-0.1.2.dist-info/LICENSE`、`shellingham-1.5.4.dist-info/LICENSE` |
+| Typer 内置 Click 的 BSD 声明 | `typer/_click/LICENSE.txt`；Typer 自身 MIT 文件另在其 dist-info/licenses 中 |
+| markdown-it-py 的两份 MIT 材料 | `markdown_it_py-4.2.0.dist-info/licenses/LICENSE`、同目录 `LICENSE.markdown-it` |
+| Pygments 许可及作者材料 | `pygments-2.21.0.dist-info/licenses/LICENSE`、同目录 `AUTHORS` |
+| tzdata 许可材料 | `tzdata-2026.5.dist-info/licenses/LICENSE`、同目录下 `licenses/LICENSE_APACHE` |
+| certifi 许可材料 | `certifi-2026.7.22.dist-info/licenses/LICENSE`；对应源码获取说明随项目 THIRD_PARTY_NOTICES.md 保留 |
+
+本轮检查项目许可声明与 Python 分发包随附材料，不把 Python 文件清单视为 Debian、CPython 或原生扩展内所有组件的完整许可审计。已发布 `v0.2.0` 标签、发行附件和 GHCR 镜像未修改，本次结果不追溯适用于那些历史产物。
+
 ## 2026-10-13：Docker 与中文管理后台 v0.2.0
 
 环境：macOS / Python 3.12.13。本机无 Docker Engine。
