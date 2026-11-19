@@ -1,0 +1,5 @@
+<rss version="2.0"><channel><link>https://site.example.test/home</link>
+  <item><title>Parent relative</title><link>../post?a=1&amp;b=2#part</link></item>
+  <item><title>Protocol relative</title><link>//cdn.example.test/post</link></item>
+  <item><title>Query only</title><link>?item=2</link></item>
+</channel></rss>

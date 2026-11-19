@@ -1,0 +1,3 @@
+<a:feed xmlns:a="http://www.w3.org/2005/Atom">
+  <a:entry><a:id>urn:example:prefixed</a:id><a:title>Prefixed Atom</a:title></a:entry>
+</a:feed>

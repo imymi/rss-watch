@@ -1,0 +1,5 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>
+  <item><title>Primary link and comments</title><link>https://example.test/post</link>
+    <atom:link rel="replies" href="https://example.test/comments"/></item>
+  <item><title>Only enclosure</title><enclosure url="https://example.test/music.mp3" type="audio/mpeg" length="50"/></item>
+</channel></rss>

@@ -1,0 +1,7 @@
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><title type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">ＡＩ <em>动态</em></div></title>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>内容</p><p>下一段</p></div></content></entry>
+  <entry><title type="html">&lt;p&gt;ＡＩ &amp;nbsp; 消息&lt;/p&gt;</title>
+    <content type="html">&lt;div&gt;content only&lt;/div&gt;</content></entry>
+  <entry><title type="text">2 &lt; 3 &amp; 4 &gt; 2</title><summary type="text">Plain &lt;b&gt;summary&lt;/b&gt;</summary></entry>
+</feed>

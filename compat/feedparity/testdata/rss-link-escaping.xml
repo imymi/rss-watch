@@ -1,0 +1,4 @@
+<rss version="2.0"><channel>
+  <item><title>Unicode and spaces</title><link>https://example.test/中文 path?a=1&amp;b=2</link></item>
+  <item><title>Existing escape</title><link>https://example.test/a%2Fb/%E4%B8%AD?x=%2f</link></item>
+</channel></rss>

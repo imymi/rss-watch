@@ -1,0 +1,4 @@
+<rss version="2.0"><channel>
+  <item><link>https://example.test/canonical</link><guid>https://example.test/id</guid><title>Link first</title></item>
+  <item><guid>https://example.test/id</guid><link>https://example.test/canonical</link><title>GUID first</title></item>
+</channel></rss>

@@ -1,0 +1,5 @@
+<rss version="2.0" xml:base="/blog/"><channel>
+  <item xml:base="nested/"><title>Nested base</title><link>one</link></item>
+  <item><title>Sibling base</title><link>two</link></item>
+  <item xml:base="https://mirror.example.test/"><title>Absolute base</title><link>three</link></item>
+</channel></rss>

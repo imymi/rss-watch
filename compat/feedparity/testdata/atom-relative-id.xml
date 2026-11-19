@@ -1,0 +1,5 @@
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="https://origin.example.test/news/"><title>Atom</title>
+  <entry><id>id-a</id><title>Relative ID with absolute base</title><link href="entry"/></entry>
+  <entry xml:base="../archive/"><id>../id-b</id><title>Nested base</title><link href="entry"/></entry>
+  <entry><id>urn:example:post:42</id><title>Opaque ID</title><link href="entry"/></entry>
+</feed>

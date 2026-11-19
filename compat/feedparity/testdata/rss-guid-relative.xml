@@ -1,0 +1,5 @@
+<rss version="2.0"><channel>
+  <item><guid>../stories/a?x=1&amp;y=2</guid><title>Default permalink</title></item>
+  <item><guid isPermaLink="true">./stories/b</guid><title>Explicit permalink</title></item>
+  <item><guid isPermaLink="false">../stories/c</guid><title>Opaque identifier</title></item>
+</channel></rss>

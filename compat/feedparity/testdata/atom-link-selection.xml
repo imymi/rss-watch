@@ -1,0 +1,8 @@
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><title>Only self</title><link rel="self" href="https://example.test/self"/></entry>
+  <entry><title>Two alternates</title>
+    <link rel="alternate" type="application/xhtml+xml" href="https://example.test/xhtml"/>
+    <link rel="alternate" type="text/html" href="https://example.test/html"/></entry>
+  <entry><title>Only enclosure</title><link rel="enclosure" href="https://example.test/download"/></entry>
+  <entry><title>Implicit alternate</title><link href="https://example.test/implicit"/></entry>
+</feed>

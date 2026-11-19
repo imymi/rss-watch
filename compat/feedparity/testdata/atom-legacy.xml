@@ -1,0 +1,4 @@
+<feed xmlns="http://purl.org/atom/ns#" version="0.3">
+  <entry><id>urn:example:legacy</id><title>Legacy Atom</title>
+    <issued>2026-11-03T07:00:00Z</issued><modified>2026-11-04T07:00:00Z</modified></entry>
+</feed>

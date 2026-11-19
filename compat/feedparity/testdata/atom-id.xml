@@ -1,0 +1,7 @@
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom</title>
+  <entry><id>urn:example:post:42</id><title>ＡＩ 消息</title>
+    <link rel="self" href="https://example.test/feed"/>
+    <link rel="alternate" href="https://example.test/post"/>
+    <published>2026-11-03T07:00:00+08:00</published>
+    <updated>2026-11-04T04:30:00Z</updated><summary type="html">&lt;b&gt;News&lt;/b&gt;</summary></entry>
+</feed>

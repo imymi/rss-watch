@@ -1,0 +1,7 @@
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><title>中文 &quot;and&quot; &amp; quotes \</title><updated>2026-11-03T07:00:00+08:00</updated></entry>
+  <entry><title type="text">Use raw date</title><updated>2026-11-03T07:00:00.000Z</updated></entry>
+  <entry><title>Empty published</title><published></published><updated>2026-11-03T07:00:00Z</updated></entry>
+  <entry><title>Fallback JSON</title><updated>date&#x2028;with&#x2029;separators</updated></entry>
+  <entry/>
+</feed>

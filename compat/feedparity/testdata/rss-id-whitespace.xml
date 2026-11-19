@@ -1,0 +1,5 @@
+<rss version="2.0"><channel>
+  <item><guid isPermaLink="false">  stable-id  </guid><title>Whitespace around GUID</title></item>
+  <item><guid> </guid><title>Empty GUID</title><link>https://example.test/item</link></item>
+  <item><guid isPermaLink="false">α &amp; β</guid><title>Non-ASCII GUID</title></item>
+</channel></rss>

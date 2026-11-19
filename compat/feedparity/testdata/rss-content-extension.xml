@@ -1,0 +1,7 @@
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"><channel>
+  <item><title>Content only</title><content:encoded><![CDATA[<p>Only content</p>]]></content:encoded>
+    <dc:date>2026-11-03T07:00:00+08:00</dc:date></item>
+  <item><title>Content and summary</title><description>Use description</description>
+    <content:encoded><![CDATA[<p>Different content</p>]]></content:encoded></item>
+</channel></rss>

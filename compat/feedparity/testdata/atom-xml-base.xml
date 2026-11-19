@@ -1,0 +1,5 @@
+<feed xmlns="http://www.w3.org/2005/Atom" xml:base="../blog/">
+  <entry xml:base="./one/"><title>Nested base</title><link href="entry"/></entry>
+  <entry><title>Sibling base</title><link href="entry"/></entry>
+  <entry><title>Final response origin</title><link href="/home"/></entry>
+</feed>
