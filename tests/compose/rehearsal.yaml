@@ -9,9 +9,12 @@ x-fixture-environment: &fixture-environment
   NO_PROXY: mock,open.feishu.cn,web,127.0.0.1
   no_proxy: mock,open.feishu.cn,web,127.0.0.1
 
+x-fixture-platform: &fixture-platform ${RSS_WATCH_REHEARSAL_PLATFORM:?Set the rehearsal platform}
+
 services:
   web:
     image: ${RSS_WATCH_REHEARSAL_PYTHON_IMAGE:?Set the pinned Python fixture image}
+    platform: *fixture-platform
     restart: "no"
     ports: !reset []
     environment:
@@ -24,6 +27,7 @@ services:
       start_period: 1s
   worker:
     image: ${RSS_WATCH_REHEARSAL_PYTHON_IMAGE:?Set the pinned Python fixture image}
+    platform: *fixture-platform
     restart: "no"
     environment: *fixture-environment
     volumes:
@@ -33,6 +37,7 @@ services:
       start_period: 1s
   mock:
     image: ${RSS_WATCH_REHEARSAL_PYTHON_IMAGE:?Set the pinned Python fixture image}
+    platform: *fixture-platform
     entrypoint: [python, /rehearsal/fixture.py, serve]
     command: []
     init: true

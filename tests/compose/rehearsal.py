@@ -46,7 +46,7 @@ def certificates(directory):
 
 
 class Rehearsal:
-    def __init__(self, context, image, fixtures):
+    def __init__(self, context, image, fixtures, platform):
         self.docker = ["docker", "--context", context]
         self.project = "rss-watch-rehearsal-" + uuid.uuid4().hex[:12]
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("COMPOSE_")}
@@ -59,6 +59,10 @@ class Rehearsal:
         })
         self.compose_files = ["-f", "compose.yaml", "-f", "tests/compose/rehearsal.yaml"]
         self.image = image
+        self.platform = platform or self.call(
+            "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image,
+        ).strip()
+        self.env["RSS_WATCH_REHEARSAL_PLATFORM"] = self.platform
 
     def call(self, *args, data=None, check=True, timeout=90):
         process = subprocess.run(
@@ -90,19 +94,38 @@ class Rehearsal:
         self.compose(*args, "web", "worker", go=go)
         return self.verify_containers(self.image if go else PYTHON_IMAGE)
 
+    def image_id(self, image):
+        result = json.loads(self.call("image", "inspect", "--platform", self.platform, image))[0]
+        assert f'{result["Os"]}/{result["Architecture"]}' == self.platform, f"wrong image platform for {image}"
+        return result["Id"]
+
     def verify_containers(self, image):
-        image_id = self.call("image", "inspect", "--format", "{{.Id}}", image).strip()
+        image_id = self.image_id(image)
+        mock_image_id = self.image_id(PYTHON_IMAGE)
         network_name = self.project + "_default"
         assert self.call("network", "inspect", "--format", "{{.Internal}}", network_name).strip() == "true"
-        for service in ("web", "worker"):
+        for service in ("web", "worker", "mock"):
             container = self.compose("ps", "-q", service).strip()
-            data = json.loads(self.call("inspect", container))[0]
+            data = json.loads(self.call("inspect", "--type", "container", container))[0]
             assert data["Config"]["Labels"]["com.docker.compose.project"] == self.project
-            assert data["Image"] == image_id, f"unexpected {service} image"
+            manifest = data.get("ImageManifestDescriptor")
+            if manifest:
+                os_arch = manifest["platform"]
+                actual_platform = f'{os_arch["os"]}/{os_arch["architecture"]}'
+                actual_image_id = manifest["digest"]
+            else:
+                runtime_image = json.loads(self.call("image", "inspect", data["Image"]))[0]
+                actual_platform = f'{runtime_image["Os"]}/{runtime_image["Architecture"]}'
+                actual_image_id = runtime_image["Id"]
+            expected_image_id = mock_image_id if service == "mock" else image_id
+            assert actual_platform == self.platform, f"{service} ran on {actual_platform}, want {self.platform}"
+            assert actual_image_id == expected_image_id, f"unexpected {service} image {actual_image_id}"
             assert data["Config"]["User"] == "10001:10001"
             assert data["State"]["Health"]["Status"] == "healthy"
             assert data["HostConfig"]["ReadonlyRootfs"]
             assert not data["HostConfig"]["PortBindings"], "rehearsal must not publish ports"
+            if service == "mock":
+                continue
             mount = {entry["Destination"]: entry for entry in data["Mounts"]}
             for path, suffix in (("/data", "rss-data"), ("/credentials", "rss-credentials")):
                 assert mount[path]["Type"] == "volume"
@@ -126,9 +149,9 @@ class Rehearsal:
 
     def run(self):
         for image in (PYTHON_IMAGE, self.image):
-            self.call("image", "inspect", "--format", "{{.Id}}", image)
+            self.image_id(image)
         self.check_project_unused()
-        print(f"Project {self.project}", flush=True)
+        print(f"Project {self.project} on {self.platform}", flush=True)
         try:
             python_id = self.up(first=True)
             token = self.compose("exec", "-T", "web", "python", "-c",
@@ -155,9 +178,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--context", default="default", help="explicit Docker context")
     parser.add_argument("--go-image", required=True, help="locally built immutable-by-convention rehearsal tag")
+    parser.add_argument("--platform", choices=("linux/amd64", "linux/arm64"), help="platform for all services (defaults to the Go image platform)")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="rss-watch-rehearsal-") as temporary:
-        Rehearsal(args.context, args.go_image, certificates(Path(temporary))).run()
+        Rehearsal(args.context, args.go_image, certificates(Path(temporary)), args.platform).run()
 
 
 if __name__ == "__main__":
