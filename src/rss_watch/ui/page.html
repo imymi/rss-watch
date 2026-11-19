@@ -4,7 +4,7 @@
 {% set leads = {'dashboard':'掌握订阅、匹配和通知的运行情况。','sources':'为每个订阅设置独立的抓取节奏。','rules':'用包含词和排除词，筛选你关心的标题。','bots':'将命中消息发送到指定的飞书群。','history':'查看通知内容、发送状态与失败原因。','settings':'集中调整监控参数，保存后自动应用。','operations':'控制监控、查看日志，并保护你的数据。','error':'检查提示后返回页面重试。'} %}
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ titles[view] }} · RSS Watch</title><link rel="icon" href="/static/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/app.css"><script src="/static/app.js" defer></script></head>
 <body><aside class="sidebar"><a href="/" class="brand"><span class="brand-mark">◔</span><span>RSS Watch<small>订阅监控工作台</small></span></a><nav aria-label="主导航">{% for path, label in nav %}<a href="{{ path }}" class="{{ 'active' if request.url.path == path else '' }}">{{ label }}</a>{% endfor %}</nav><div class="sidebar-foot"><span class="muted">管理员 · {{ username }}</span><form action="/logout" method="post">{{ token() }}<button class="text-button">退出登录</button></form></div></aside>
-<main class="main"><header class="page-header"><div><p class="eyebrow">RSS WATCH / 工作台</p><h1>{{ titles[view] }}</h1><p class="muted">{{ leads[view] }}</p></div><span class="version">v0.2</span></header>
+<main class="main"><header class="page-header"><div><p class="eyebrow">RSS WATCH / 工作台</p><h1>{{ titles[view] }}</h1><p class="muted">{{ leads[view] }}</p></div><span class="version">{{ version|default('v0.2') }}</span></header>
 {% if maintenance %}<div class="warning" role="status">系统处于维护模式。监控已停止写入，请检查恢复结果后在“运维与备份”退出维护模式。</div>{% endif %}
 {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
 

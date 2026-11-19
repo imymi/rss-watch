@@ -1,5 +1,12 @@
 # 更新记录
 
+## v0.3.0-rc.1（Go 版，待发布）
+
+- Go Web 沿用中文后台、管理 API 和原有管理员密码。Go Worker 支持已有 RSS/Atom 指纹、条件请求、持久化队列和飞书重试。
+- Go 与 Python v0.2.0 共用 SQLite schema 2、数据卷和凭据卷。原卷升级及回退保留基线、待发任务和历史事件编号。
+- Go 镜像支持 Linux AMD64 和 ARM64。候选版 CI 在两种架构上分别构建镜像并演练 `Python → Go → Python`。
+- [候选版发布说明](docs/releases/v0.3.0-rc.1.md) · [Compose 升级与回退](docs/go-compose-migration.md)
+
 ## v0.2.0 — 2026-10-13
 
 - 增加 Docker Compose 部署，同一镜像分别运行 web 与 worker；凭据卷在 worker 中只读。

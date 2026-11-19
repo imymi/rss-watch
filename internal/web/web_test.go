@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"rss-watch/internal/buildinfo"
 	"rss-watch/internal/worker"
 	"rss-watch/src/rss_watch/ui"
 )
@@ -340,8 +341,9 @@ func TestWebAndWorkerEndToEnd(t *testing.T) {
 	}
 	csrf := b.apiToken()
 	b.api("POST", "/api/sources", row{}, "", 403)
-	if !strings.Contains(b.get("/"), username) {
-		t.Fatal("dashboard missing logged-in user")
+	dashboard := b.get("/")
+	if !strings.Contains(dashboard, username) || !strings.Contains(dashboard, `<span class="version">v`+buildinfo.Version+`</span>`) {
+		t.Fatal("dashboard missing logged-in user or Go release version")
 	}
 
 	var phase, notifications atomic.Int32

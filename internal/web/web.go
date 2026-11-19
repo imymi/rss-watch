@@ -22,6 +22,7 @@ import (
 	"github.com/nikolalohinski/gonja/v2/exec"
 	"github.com/nikolalohinski/gonja/v2/loaders"
 	"modernc.org/sqlite"
+	"rss-watch/internal/buildinfo"
 	"rss-watch/internal/worker"
 	"rss-watch/src/rss_watch/ui"
 )
@@ -319,7 +320,7 @@ func (a *App) page(w http.ResponseWriter, r *http.Request, code int, view string
 	data := row{
 		"view": view, "nav": nav, "settings": cfg, "notice": r.URL.Query().Get("notice"),
 		"csrf": a.csrf(session(r)), "maintenance": a.maintenance(), "username": name,
-		"request": row{"url": row{"path": r.URL.Path}},
+		"request": row{"url": row{"path": r.URL.Path}}, "version": "v" + buildinfo.Version,
 	}
 	for key, value := range props {
 		data[key] = value

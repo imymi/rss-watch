@@ -1,0 +1,94 @@
+name: Go release candidate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'go/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  go-tests:
+    name: Go compatibility and race tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.27.1'
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Verify parsing, Worker and Web
+        run: |
+          export FEED_PARITY_PYTHON="$PWD/.venv/bin/python"
+          go vet ./...
+          go test -race -count=1 ./...
+
+  image-rehearsal:
+    name: Go image and Python rollback (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            engine_arch: x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            engine_arch: aarch64
+    env:
+      RSS_WATCH_CI_CONTEXT: rss-watch-rc-ci
+      PLATFORM: linux/${{ matrix.arch }}
+      ENGINE_ARCH: ${{ matrix.engine_arch }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # The rehearsal inspects individual platform manifests, which requires Engine API 1.49+.
+      - uses: docker/setup-docker-action@v5.7.0
+        with:
+          version: v29.9.3
+          context: rss-watch-rc-ci
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - name: Check native runner and Compose
+        run: |
+          test "$(docker --context "$RSS_WATCH_CI_CONTEXT" info --format '{{.Architecture}}')" = "$ENGINE_ARCH"
+          docker --context "$RSS_WATCH_CI_CONTEXT" version
+          docker --context "$RSS_WATCH_CI_CONTEXT" compose version
+      - name: Build the candidate locally
+        run: |
+          version=$(cat internal/buildinfo/VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$ ]]
+          image="rss-watch-go:$version-${PLATFORM#linux/}"
+          docker --context "$RSS_WATCH_CI_CONTEXT" build --platform "$PLATFORM" \
+            -f Dockerfile.golang -t "$image" \
+            --label "org.opencontainers.image.version=$version" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" .
+          reported=$(docker --context "$RSS_WATCH_CI_CONTEXT" run --rm --network none --platform "$PLATFORM" "$image" --version)
+          test "$reported" = "v$version"
+          labeled=$(docker --context "$RSS_WATCH_CI_CONTEXT" image inspect --platform "$PLATFORM" \
+            --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")
+          test "$labeled" = "$version"
+          printf 'GO_IMAGE=%s\n' "$image" >> "$GITHUB_ENV"
+      - name: Rehearse Python to Go and back
+        run: |
+          python_image=$(python3 -B -c 'import runpy; print(runpy.run_path("tests/compose/rehearsal.py")["PYTHON_IMAGE"])')
+          docker --context "$RSS_WATCH_CI_CONTEXT" pull --platform "$PLATFORM" "$python_image"
+          python3 -B tests/compose/rehearsal.py --context "$RSS_WATCH_CI_CONTEXT" \
+            --platform "$PLATFORM" --go-image "$GO_IMAGE"

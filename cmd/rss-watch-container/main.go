@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"rss-watch/internal/buildinfo"
 	"rss-watch/internal/containerlog"
 	"rss-watch/internal/web"
 	"rss-watch/internal/worker"
@@ -29,8 +30,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "--version" {
+		_, err := fmt.Fprintln(os.Stdout, "v"+buildinfo.Version)
+		return err
+	}
 	if len(args) == 0 {
-		return errors.New("用法：rss-watch-container {web|worker|check-web|check-worker|bootstrap-token} [--config PATH]")
+		return errors.New("用法：rss-watch-container --version 或 rss-watch-container {web|worker|check-web|check-worker|bootstrap-token} [--config PATH]")
 	}
 	role := args[0]
 	config := os.Getenv("RSS_WATCH_CONFIG")
