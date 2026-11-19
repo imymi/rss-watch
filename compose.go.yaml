@@ -1,0 +1,5 @@
+services:
+  web:
+    image: ${RSS_WATCH_GO_IMAGE:-rss-watch-go:local}
+  worker:
+    image: ${RSS_WATCH_GO_IMAGE:-rss-watch-go:local}

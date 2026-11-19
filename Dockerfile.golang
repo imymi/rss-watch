@@ -1,0 +1,25 @@
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY cmd/rss-watch-container cmd/rss-watch-container
+COPY internal internal
+COPY src/rss_watch/ui src/rss_watch/ui
+ARG TARGETOS TARGETARCH
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags='-s -w' \
+    -o /out/usr/local/bin/rss-watch-container ./cmd/rss-watch-container \
+    && install -d -m 0700 -o 10001 -g 10001 /out/data /out/credentials \
+    && install -d -m 1777 /out/tmp
+
+FROM scratch
+COPY --from=build /out/ /
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY deploy/container.toml /app/container.toml
+COPY LICENSE /app/LICENSE
+ENV RSS_WATCH_CONFIG=/app/container.toml SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+WORKDIR /app
+USER 10001:10001
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/rss-watch-container"]
+CMD ["web"]

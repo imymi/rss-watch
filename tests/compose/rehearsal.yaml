@@ -1,0 +1,59 @@
+x-fixture-environment: &fixture-environment
+  SSL_CERT_FILE: /rehearsal/ca.pem
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  ALL_PROXY: ""
+  http_proxy: ""
+  https_proxy: ""
+  all_proxy: ""
+  NO_PROXY: mock,open.feishu.cn,web,127.0.0.1
+  no_proxy: mock,open.feishu.cn,web,127.0.0.1
+
+services:
+  web:
+    image: ${RSS_WATCH_REHEARSAL_PYTHON_IMAGE:?Set the pinned Python fixture image}
+    restart: "no"
+    ports: !reset []
+    environment:
+      <<: *fixture-environment
+      RSS_WATCH_SECURE_COOKIES: "0"
+    volumes:
+      - ${RSS_WATCH_REHEARSAL_FIXTURES:?Set the isolated fixture directory}/ca.pem:/rehearsal/ca.pem:ro
+    healthcheck:
+      interval: 2s
+      start_period: 1s
+  worker:
+    image: ${RSS_WATCH_REHEARSAL_PYTHON_IMAGE:?Set the pinned Python fixture image}
+    restart: "no"
+    environment: *fixture-environment
+    volumes:
+      - ${RSS_WATCH_REHEARSAL_FIXTURES:?Set the isolated fixture directory}/ca.pem:/rehearsal/ca.pem:ro
+    healthcheck:
+      interval: 2s
+      start_period: 1s
+  mock:
+    image: ${RSS_WATCH_REHEARSAL_PYTHON_IMAGE:?Set the pinned Python fixture image}
+    entrypoint: [python, /rehearsal/fixture.py, serve]
+    command: []
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    volumes:
+      - ${RSS_WATCH_REHEARSAL_FIXTURES:?Set the isolated fixture directory}:/rehearsal:ro
+    networks:
+      default:
+        aliases: [open.feishu.cn]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/ledger', timeout=2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+networks:
+  default:
+    internal: true
