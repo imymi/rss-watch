@@ -1,0 +1,182 @@
+[
+  {
+    "key": "default_interval",
+    "label": "新订阅默认间隔（秒）",
+    "default": 300,
+    "minimum": 60,
+    "maximum": 86400,
+    "group": "抓取",
+    "help": ""
+  },
+  {
+    "key": "max_sources",
+    "label": "订阅源数量上限",
+    "default": 100,
+    "minimum": 1,
+    "maximum": 1000,
+    "group": "抓取",
+    "help": ""
+  },
+  {
+    "key": "fetch_concurrency",
+    "label": "抓取并发数",
+    "default": 5,
+    "minimum": 1,
+    "maximum": 20,
+    "group": "抓取",
+    "help": ""
+  },
+  {
+    "key": "connect_timeout",
+    "label": "连接超时（秒）",
+    "default": 10,
+    "minimum": 1,
+    "maximum": 120,
+    "group": "网络",
+    "help": ""
+  },
+  {
+    "key": "request_deadline",
+    "label": "请求总时限（秒）",
+    "default": 30,
+    "minimum": 1,
+    "maximum": 300,
+    "group": "网络",
+    "help": ""
+  },
+  {
+    "key": "max_body_mib",
+    "label": "订阅响应上限（MiB）",
+    "default": 5,
+    "minimum": 1,
+    "maximum": 50,
+    "group": "网络",
+    "help": ""
+  },
+  {
+    "key": "http_proxy",
+    "label": "HTTP 代理",
+    "default": "",
+    "minimum": 0,
+    "maximum": 0,
+    "group": "网络",
+    "help": "留空沿用部署环境"
+  },
+  {
+    "key": "https_proxy",
+    "label": "HTTPS 代理",
+    "default": "",
+    "minimum": 0,
+    "maximum": 0,
+    "group": "网络",
+    "help": "http://host:port 或 https://host:port"
+  },
+  {
+    "key": "no_proxy",
+    "label": "代理排除地址",
+    "default": "",
+    "minimum": 0,
+    "maximum": 0,
+    "group": "网络",
+    "help": "逗号分隔的主机名或 IP；* 表示全部直连"
+  },
+  {
+    "key": "max_attempts",
+    "label": "最多发送次数（含首次）",
+    "default": 5,
+    "minimum": 1,
+    "maximum": 10,
+    "group": "推送",
+    "help": ""
+  },
+  {
+    "key": "retry_delays",
+    "label": "重试间隔（秒）",
+    "default": "30,120,600,1800",
+    "minimum": 0,
+    "maximum": 0,
+    "group": "推送",
+    "help": "逗号分隔，次数超过间隔数量时沿用最后一个"
+  },
+  {
+    "key": "send_interval",
+    "label": "每机器人发送间隔（秒）",
+    "default": 1,
+    "minimum": 1,
+    "maximum": 60,
+    "group": "推送",
+    "help": ""
+  },
+  {
+    "key": "fetch_backoff_max",
+    "label": "抓取失败退避上限（秒）",
+    "default": 3600,
+    "minimum": 60,
+    "maximum": 86400,
+    "group": "抓取",
+    "help": ""
+  },
+  {
+    "key": "retention_days",
+    "label": "已发送历史保留天数",
+    "default": 90,
+    "minimum": 1,
+    "maximum": 3650,
+    "group": "数据",
+    "help": "文章指纹及未完成、失败任务继续保留"
+  },
+  {
+    "key": "cleanup_hours",
+    "label": "历史清理周期（小时）",
+    "default": 24,
+    "minimum": 1,
+    "maximum": 168,
+    "group": "数据",
+    "help": ""
+  },
+  {
+    "key": "backup_hours",
+    "label": "自动备份周期（小时）",
+    "default": 24,
+    "minimum": 0,
+    "maximum": 720,
+    "group": "数据",
+    "help": "0 关闭自动备份"
+  },
+  {
+    "key": "backup_keep",
+    "label": "自动备份保留份数",
+    "default": 7,
+    "minimum": 1,
+    "maximum": 100,
+    "group": "数据",
+    "help": ""
+  },
+  {
+    "key": "timezone",
+    "label": "页面时区",
+    "default": "Asia/Shanghai",
+    "minimum": 0,
+    "maximum": 0,
+    "group": "显示",
+    "help": ""
+  },
+  {
+    "key": "fetch_paused",
+    "label": "暂停抓取",
+    "default": false,
+    "minimum": 0,
+    "maximum": 0,
+    "group": "控制",
+    "help": ""
+  },
+  {
+    "key": "delivery_paused",
+    "label": "暂停推送",
+    "default": false,
+    "minimum": 0,
+    "maximum": 0,
+    "group": "控制",
+    "help": ""
+  }
+]

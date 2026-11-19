@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func openDatabase(ctx context.Context, path string) (*sql.DB, error) {
+func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	address := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
 	db, err := sql.Open("sqlite", address.String()+"?mode=rw&_txlock=immediate&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
@@ -41,7 +41,7 @@ func openDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func writeTx(ctx context.Context, db *sql.DB, write func(*sql.Tx) error) error {
+func WriteTx(ctx context.Context, db *sql.DB, write func(*sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -71,7 +71,7 @@ func (w *worker) heartbeat(ctx context.Context, running bool, revision string) e
 
 func (w *worker) cleanup(ctx context.Context, now time.Time, retention int) error {
 	cutoff := epoch(now) - float64(retention)*86400
-	return writeTx(ctx, w.db, func(tx *sql.Tx) error {
+	return WriteTx(ctx, w.db, func(tx *sql.Tx) error {
 		for _, query := range []struct {
 			sql    string
 			cutoff float64

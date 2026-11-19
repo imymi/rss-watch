@@ -33,7 +33,7 @@ func testDatabase(t *testing.T) (Config, *sql.DB) {
 	path := filepath.Join(dir, "rss-watch.sqlite3")
 	pythonFixture(t,
 		"import sys; from pathlib import Path; from rss_watch.db import Database; Database(Path(sys.argv[1]))", path)
-	db, err := openDatabase(t.Context(), path)
+	db, err := OpenDatabase(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}

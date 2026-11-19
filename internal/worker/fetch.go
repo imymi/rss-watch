@@ -14,8 +14,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
 	"rss-watch/internal/feed"
 )
 
@@ -118,7 +116,7 @@ func fetchFeed(ctx context.Context, client *http.Client, src source, s settings)
 }
 
 func (w *worker) commitFeed(ctx context.Context, src source, result fetchResult, now float64) error {
-	return writeTx(ctx, w.db, func(tx *sql.Tx) error {
+	return WriteTx(ctx, w.db, func(tx *sql.Tx) error {
 		var name string
 		current := source{id: src.id}
 		err := tx.QueryRowContext(ctx, `SELECT name,initialized,interval,etag,modified FROM sources
@@ -224,26 +222,14 @@ func matchesByBot(rules []rule, source int64, title string) map[int64][]match {
 	if len(rules) == 0 {
 		return nil
 	}
-	fold := cases.Fold()
-	title = fold.String(feed.Clean(title))
+	title = feed.FoldTitle(title)
 	matches := make(map[int64][]match)
 	for _, r := range rules {
 		if len(r.sourceIDs) > 0 && !slices.Contains(r.sourceIDs, source) {
 			continue
 		}
-		contains := func(word string) bool {
-			return strings.Contains(title, fold.String(strings.TrimSpace(norm.NFKC.String(word))))
-		}
-		if slices.ContainsFunc(r.excludes, contains) {
-			continue
-		}
-		var hits []string
-		for _, keyword := range r.includes {
-			if contains(keyword) {
-				hits = append(hits, keyword)
-			}
-		}
-		if len(hits) > 0 && (r.mode == "any" || len(hits) == len(r.includes)) {
+		hits := feed.MatchWords(title, r.mode, r.includes, r.excludes)
+		if len(hits) > 0 {
 			matches[r.botID] = append(matches[r.botID], match{r.id, r.name, hits})
 		}
 	}

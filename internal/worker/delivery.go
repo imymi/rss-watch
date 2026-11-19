@@ -31,35 +31,53 @@ type credential struct {
 }
 
 func loadCredential(dir, ref string) (credential, error) {
+	cred, _, err := readCredential(dir, ref)
+	return cred, err
+}
+
+func readCredential(dir, ref string) (credential, []byte, error) {
 	var cred credential
 	if filepath.Base(ref) != ref || !strings.HasSuffix(ref, ".json") {
-		return cred, errors.New("凭据引用无效")
+		return cred, nil, errors.New("凭据引用无效")
 	}
 	path := filepath.Join(dir, ref)
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return cred, err
+		return cred, nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return cred, err
+		return cred, nil, err
 	}
 	if info.Mode() != 0o600 || info.Size() > 64<<10 {
-		return cred, errors.New("凭据文件格式无效")
+		return cred, nil, errors.New("凭据文件格式无效")
 	}
 	body, err := io.ReadAll(io.LimitReader(file, 64<<10+1))
 	if err != nil {
-		return cred, err
+		return cred, nil, err
 	}
-	if len(body) > 64<<10 || json.Unmarshal(body, &cred) != nil || cred.Secret == nil || !validWebhook(cred.Webhook) {
-		return credential{}, errors.New("凭据内容无效")
+	if len(body) > 64<<10 || json.Unmarshal(body, &cred) != nil || cred.Secret == nil || !ValidWebhook(cred.Webhook) {
+		return credential{}, nil, errors.New("凭据内容无效")
 	}
-	return cred, nil
+	return cred, body, nil
 }
 
-func validWebhook(value string) bool {
+// ValidateCredential checks a stored credential without returning secrets.
+func ValidateCredential(dir, ref string) error {
+	_, _, err := readCredential(dir, ref)
+	return err
+}
+
+// ReadCredentialFile reads validated bytes from the same checked descriptor.
+func ReadCredentialFile(dir, ref string) ([]byte, error) {
+	_, body, err := readCredential(dir, ref)
+	return body, err
+}
+
+// ValidWebhook accepts the production Feishu custom robot endpoint format.
+func ValidWebhook(value string) bool {
 	if strings.ContainsFunc(value, unicode.IsSpace) {
 		return false
 	}
@@ -97,7 +115,7 @@ func (w *worker) recover(ctx context.Context, s settings) error {
 func (w *worker) claim(ctx context.Context, s settings, now float64) (*delivery, bool, error) {
 	var claimed *delivery
 	var found bool
-	err := writeTx(ctx, w.db, func(tx *sql.Tx) error {
+	err := WriteTx(ctx, w.db, func(tx *sql.Tx) error {
 		var task delivery
 		var ref string
 		err := tx.QueryRowContext(ctx, `SELECT d.id,d.bot_id,d.payload,d.attempts,b.credential_ref
@@ -148,7 +166,7 @@ func (w *worker) deliverOne(ctx context.Context, s settings) (bool, error) {
 	}
 	s = *w.settings.Load()
 	now := epoch(time.Now())
-	return true, writeTx(ctx, w.db, func(tx *sql.Tx) error {
+	return true, WriteTx(ctx, w.db, func(tx *sql.Tx) error {
 		sendDelay := float64(s.SendInterval)
 		if failure == nil {
 			if _, err := tx.ExecContext(ctx, `UPDATE deliveries SET state='sent',updated=?,last_error=NULL WHERE id=?`, now, task.id); err != nil {

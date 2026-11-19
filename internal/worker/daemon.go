@@ -55,7 +55,7 @@ func run(ctx context.Context, config Config, makeClients func(networkSettings) (
 	if ctx.Err() != nil {
 		return nil
 	}
-	daemonLock, err := lock(ctx, filepath.Join(config.DataDir, "daemon.lock"), unix.LOCK_EX, false)
+	daemonLock, err := LockFile(ctx, filepath.Join(config.DataDir, "daemon.lock"), unix.LOCK_EX, false)
 	if err != nil {
 		return fmt.Errorf("获取后台进程锁：%w", err)
 	}
@@ -79,7 +79,7 @@ func run(ctx context.Context, config Config, makeClients func(networkSettings) (
 
 func runData(ctx context.Context, config Config, makeClients func(networkSettings) (httpClients, error)) error {
 	lockCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	dataLock, err := lock(lockCtx, filepath.Join(config.DataDir, "data.lock"), unix.LOCK_SH, true)
+	dataLock, err := LockFile(lockCtx, filepath.Join(config.DataDir, "data.lock"), unix.LOCK_SH, true)
 	cancel()
 	if err != nil {
 		return err
@@ -88,7 +88,7 @@ func runData(ctx context.Context, config Config, makeClients func(networkSetting
 	if maintenance, err := config.maintenance(); err != nil || maintenance {
 		return err
 	}
-	db, err := openDatabase(ctx, filepath.Join(config.DataDir, "rss-watch.sqlite3"))
+	db, err := OpenDatabase(ctx, filepath.Join(config.DataDir, "rss-watch.sqlite3"))
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (c Config) maintenance() (bool, error) {
 	return err == nil, err
 }
 
-func lock(ctx context.Context, path string, operation int, retry bool) (*os.File, error) {
+func LockFile(ctx context.Context, path string, operation int, retry bool) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
