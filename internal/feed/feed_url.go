@@ -1,4 +1,4 @@
-package feedparity
+package feed
 
 import (
 	"net/url"

@@ -1,4 +1,4 @@
-package feedparity
+package feed
 
 import (
 	"bytes"
@@ -26,9 +26,9 @@ const (
 	dct    = "http://purl.org/dc/terms/"
 )
 
-// Read the complete XML document before returning articles. A feed with a
+// Parse reads the complete XML document before returning articles. A feed with a
 // usable prefix and a broken suffix must never establish a baseline.
-func parseCandidate(body []byte, responseURL string) ([]article, error) {
+func Parse(body []byte, responseURL string) ([]Article, error) {
 	d := feedDecoder(body)
 	root, err := documentRoot(d)
 	if err != nil {
@@ -41,7 +41,7 @@ func parseCandidate(body []byte, responseURL string) ([]article, error) {
 		return nil, errors.New("unsupported RSS/Atom root")
 	}
 
-	articles := []article{}
+	articles := []Article{}
 	if err := readFeedChildren(d, elementBase(responseURL, root), rootName, root.Name.Space, &articles); err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func xmlSpace(value string) bool {
 	return strings.Trim(value, " \t\r\n") == ""
 }
 
-func readFeedChildren(d *xml.Decoder, base, parent, native string, articles *[]article) error {
+func readFeedChildren(d *xml.Decoder, base, parent, native string, articles *[]Article) error {
 	for {
 		token, err := d.Token()
 		if err != nil {
@@ -160,35 +160,35 @@ type entryFields struct {
 	hasLink, hasSummary, hasPublished, hasContent bool
 }
 
-func readEntry(d *xml.Decoder, base string, start xml.StartElement, native string) (article, error) {
+func readEntry(d *xml.Decoder, base string, start xml.StartElement, native string) (Article, error) {
 	base = elementBase(base, start)
 	fields := entryFields{id: attribute(start, rdf, "about")}
 	for {
 		token, err := d.Token()
 		if err != nil {
-			return article{}, err
+			return Article{}, err
 		}
 		switch token := token.(type) {
 		case xml.StartElement:
 			field := fieldName(token.Name, native)
 			if field == "" {
 				if err := d.Skip(); err != nil {
-					return article{}, err
+					return Article{}, err
 				}
 				continue
 			}
 			value, err := readFieldText(d, field == "title" || field == "summary" || field == "content")
 			if err != nil {
-				return article{}, err
+				return Article{}, err
 			}
 			fields.set(field, value, elementBase(base, token), token)
 		case xml.EndElement:
 			if !fields.hasPublished {
 				fields.published = fields.updated
 			}
-			entry := article{
-				Title:     cleanText(fields.title),
-				Summary:   cleanText(fields.summary),
+			entry := Article{
+				Title:     Clean(fields.title),
+				Summary:   Clean(fields.summary),
 				Published: fields.published,
 				Link:      fields.link,
 			}

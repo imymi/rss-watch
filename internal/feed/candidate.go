@@ -1,4 +1,4 @@
-package feedparity
+package feed
 
 import (
 	"crypto/sha256"
@@ -11,7 +11,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-type article struct {
+// Article is a normalized feed entry with the v0.2 article identity.
+type Article struct {
 	Title       string `json:"title"`
 	Summary     string `json:"summary"`
 	Published   string `json:"published"`
@@ -19,7 +20,8 @@ type article struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
-func cleanText(input string) string {
+// Clean normalizes the text shown by the monitor and used in title matching.
+func Clean(input string) string {
 	tokenizer := html.NewTokenizer(strings.NewReader(input))
 	var plain strings.Builder
 	hidden := 0
@@ -55,7 +57,7 @@ func cleanText(input string) string {
 	}
 }
 
-func fingerprint(id string, entry article) string {
+func fingerprint(id string, entry Article) string {
 	var identity string
 	switch {
 	case id != "":

@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"rss-watch/internal/feed"
 )
 
 const responseURL = "https://feeds.example.test/final/updates.xml?from=redirect"
@@ -57,7 +59,7 @@ func compareFixtures(t *testing.T, pattern string, origins map[string]string) {
 		}
 		t.Fatalf("run Python oracle: %v", err)
 	}
-	var reference map[string][]article
+	var reference map[string][]feed.Article
 	if err := json.Unmarshal(output, &reference); err != nil {
 		t.Fatalf("decode Python oracle: %v", err)
 	}
@@ -79,7 +81,7 @@ func compareFixtures(t *testing.T, pattern string, origins map[string]string) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, parseErr := parseCandidate(body, samples[path])
+			got, parseErr := feed.Parse(body, samples[path])
 			switch {
 			case (parseErr != nil) != (expected == nil):
 				total.acceptance++

@@ -4,13 +4,11 @@
 
 ## 复现
 
-在本分支根目录准备 Python 3.12 和锁定依赖，再进入实验目录运行 Go 测试。Go 模块要求 Go 1.25 或更新版本。首次需下载 Go 模块和 Python 依赖，测试读取本地样本。
+在本分支根目录准备 Python 3.12 和锁定依赖。仓库的 Go 模块要求 Go 1.27 或更新版本。首次需下载 Go 模块和 Python 依赖，测试读取本地样本。
 
 ```sh
 uv sync --locked --python 3.12
-export FEED_PARITY_PYTHON="$PWD/.venv/bin/python"
-cd compat/feedparity
-go test -count=1 -v ./...
+FEED_PARITY_PYTHON="$PWD/.venv/bin/python" go test -count=1 -v ./compat/feedparity
 ```
 
 测试遇到差异会输出具体样本和字段并返回非零。用 `-run TestPythonParity` 运行合成样本，用 `-run TestRealFeedParity` 复核脱敏订阅。
