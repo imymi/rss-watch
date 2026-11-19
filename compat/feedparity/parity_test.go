@@ -11,7 +11,24 @@ import (
 const responseURL = "https://feeds.example.test/final/updates.xml?from=redirect"
 
 func TestPythonParity(t *testing.T) {
-	paths, err := filepath.Glob("testdata/*")
+	compareFixtures(t, "testdata/*.*", nil)
+}
+
+func TestRealFeedParity(t *testing.T) {
+	body, err := os.ReadFile("testdata/real/response-urls.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var origins map[string]string
+	if err := json.Unmarshal(body, &origins); err != nil {
+		t.Fatal(err)
+	}
+	compareFixtures(t, "testdata/real/*.xml", origins)
+}
+
+func compareFixtures(t *testing.T, pattern string, origins map[string]string) {
+	t.Helper()
+	paths, err := filepath.Glob(pattern)
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("load fixtures: %v (%d files)", err, len(paths))
 	}
@@ -19,8 +36,20 @@ func TestPythonParity(t *testing.T) {
 	if python == "" {
 		python = "python3"
 	}
-	cmd := exec.CommandContext(t.Context(), python,
-		append([]string{"-B", "python_oracle.py", responseURL}, paths...)...)
+	args := []string{"-B", "python_oracle.py"}
+	samples := make(map[string]string, len(paths))
+	for _, path := range paths {
+		base := responseURL
+		if origins != nil {
+			base = origins[filepath.Base(path)]
+			if base == "" {
+				t.Fatalf("missing anonymized response URL for %s", path)
+			}
+		}
+		samples[path] = base
+		args = append(args, path, base)
+	}
+	cmd := exec.CommandContext(t.Context(), python, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
@@ -50,7 +79,7 @@ func TestPythonParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, parseErr := parseCandidate(body, responseURL)
+			got, parseErr := parseCandidate(body, samples[path])
 			switch {
 			case (parseErr != nil) != (expected == nil):
 				total.acceptance++

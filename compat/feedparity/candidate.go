@@ -1,15 +1,12 @@
 package feedparity
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	stdhtml "html"
-	"net/url"
 	"strings"
 	"unicode"
 
-	"github.com/mmcdole/gofeed"
 	"golang.org/x/net/html"
 	"golang.org/x/text/unicode/norm"
 )
@@ -20,46 +17,6 @@ type article struct {
 	Published   string `json:"published"`
 	Link        string `json:"link"`
 	Fingerprint string `json:"fingerprint"`
-}
-
-// parseCandidate tests the universal gofeed model plus final-response URL
-// resolution. Identity and display fields are compared against Python.
-func parseCandidate(body []byte, responseURL string) ([]article, error) {
-	base, err := url.Parse(responseURL)
-	if err != nil {
-		return nil, err
-	}
-	feed, err := gofeed.NewParser().Parse(bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	articles := make([]article, 0, len(feed.Items))
-	for _, item := range feed.Items {
-		published := item.Published
-		if published == "" {
-			published = item.Updated
-		}
-		entry := article{
-			Title:     cleanText(item.Title),
-			Summary:   cleanText(item.Description),
-			Published: published,
-			Link:      resolveLink(base, item.Link),
-		}
-		entry.Fingerprint = fingerprint(item.GUID, entry)
-		articles = append(articles, entry)
-	}
-	return articles, nil
-}
-
-func resolveLink(base *url.URL, link string) string {
-	if link == "" {
-		return ""
-	}
-	ref, err := url.Parse(link)
-	if err != nil || ref.IsAbs() {
-		return link
-	}
-	return base.ResolveReference(ref).String()
 }
 
 func cleanText(input string) string {

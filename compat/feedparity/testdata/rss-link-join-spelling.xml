@@ -1,0 +1,5 @@
+<rss version="2.0"><channel>
+  <item><link>../中文 路径/%2F?a=中 文#甲 乙</link></item>
+  <item><link>HTTPS://example.test/path</link></item>
+  <item><link>https:////example.test/path</link></item>
+</channel></rss>

@@ -1,0 +1,11 @@
+{
+  "sample-01.xml": "https://h1.sample-1.example.test/v1/v2",
+  "sample-02.xml": "https://h1.sample-2.example.test/v1",
+  "sample-03.xml": "https://h1.sample-3.example.test/v1/v2/",
+  "sample-04.xml": "https://h1.sample-4.example.test/v1/v2/",
+  "sample-05.xml": "https://h1.sample-5.example.test/v1/v2/v3/",
+  "sample-06.xml": "https://h1.sample-6.example.test/v1/v2/v3",
+  "sample-07.xml": "https://h1.sample-7.example.test/v1",
+  "sample-08.xml": "https://h1.sample-8.example.test/v1/v2/",
+  "sample-09.xml": "https://h1.sample-9.example.test/v1/v2"
+}

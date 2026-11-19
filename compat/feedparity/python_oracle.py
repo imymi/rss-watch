@@ -14,9 +14,10 @@ from rss_watch.domain import parse_feed
 def main():
     if feedparser.__version__ != "6.0.14":
         raise SystemExit(f"Expected feedparser 6.0.14, got {feedparser.__version__}")
-    base_url, *paths = sys.argv[1:]
     results = {}
-    for path in map(Path, paths):
+    arguments = iter(sys.argv[1:])
+    for filename, base_url in zip(arguments, arguments, strict=True):
+        path = Path(filename)
         try:
             articles = parse_feed(path.read_bytes(), base_url)
         except ValueError:
